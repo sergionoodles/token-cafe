@@ -51,6 +51,17 @@ local function statusText(p)
 	return "Ready"
 end
 
+-- Brand logo when known, Tabler glyph fallback otherwise.
+-- Logos are off-white SVGs (see assets/); status is still
+-- conveyed by the adjacent status text color.
+local function providerIcon(p, size)
+	if type(p) == "table" and (p.icon or "") ~= "" then
+		return ui.image({ path = p.icon, width = size, height = size, fit = "contain" })
+	end
+	local name = (type(p) == "table" and p.glyph) or "cpu"
+	return ui.glyph({ name = name, size = size, color = statusColor(p) })
+end
+
 local function quotaRows(p)
 	local rows = {}
 	if type(p.windows) == "table" and #p.windows > 0 then
@@ -213,7 +224,7 @@ local function providerCard(p)
 	local rows = quotaRows(p)
 	local body = {
 		ui.row({ gap = 8, align = "center" }, {
-			ui.glyph({ name = p.glyph or "cpu", size = 18, color = statusColor(p) }),
+			providerIcon(p, 18),
 			ui.column({ gap = 0, flexGrow = 1 }, {
 				ui.label({ text = p.name or "Provider", fontWeight = "bold", maxLines = 1 }),
 				ui.label({ text = statusText(p), fontSize = 11, color = statusColor(p), maxLines = 1 }),
@@ -256,7 +267,7 @@ local function detailView(p)
 	end
 	local nodes = {
 		ui.row({ gap = 8, align = "center" }, {
-			ui.glyph({ name = p.glyph or "cpu", size = 22, color = statusColor(p) }),
+			providerIcon(p, 22),
 			ui.column({ gap = 0, flexGrow = 1 }, {
 				ui.label({ text = p.name or "Provider", fontSize = 16, fontWeight = "bold" }),
 				ui.label({ text = statusText(p), fontSize = 12, color = statusColor(p) }),
