@@ -8,13 +8,13 @@ local M = {}
 M.ORDER = { "codex", "claude", "antigravity", "opencode", "openrouter", "grok", "venice" }
 
 M.META = {
-	codex = { name = "Codex", glyph = "terminal-2" },
-	claude = { name = "Claude Code", glyph = "sparkles" },
-	antigravity = { name = "Google Antigravity", glyph = "planet" },
-	opencode = { name = "OpenCode", glyph = "code" },
-	openrouter = { name = "OpenRouter", glyph = "world" },
-	grok = { name = "Grok", glyph = "bolt" },
-	venice = { name = "Venice", glyph = "crown" },
+	codex = { name = "Codex", glyph = "terminal-2", icon = "assets/codex.svg" },
+	claude = { name = "Claude Code", glyph = "sparkles", icon = "assets/claude.svg" },
+	antigravity = { name = "Google Antigravity", glyph = "planet", icon = "assets/antigravity.svg" },
+	opencode = { name = "OpenCode", glyph = "code", icon = "assets/opencode.svg" },
+	openrouter = { name = "OpenRouter", glyph = "world", icon = "assets/openrouter.svg" },
+	grok = { name = "Grok", glyph = "bolt", icon = "assets/grok.svg" },
+	venice = { name = "Venice", glyph = "crown", icon = "assets/venice.svg" },
 }
 
 function M.displayName(id)
@@ -33,6 +33,14 @@ function M.glyph(id)
 	return "cpu"
 end
 
+function M.icon(id)
+	local meta = M.META[id]
+	if meta then
+		return meta.icon or ""
+	end
+	return ""
+end
+
 -- Canonical empty provider card. All fields are plain data
 -- (safe for noctalia.state across isolated entries).
 function M.blank(id)
@@ -40,6 +48,7 @@ function M.blank(id)
 		id = id,
 		name = M.displayName(id),
 		glyph = M.glyph(id),
+		icon = M.icon(id),
 		enabled = true,
 		ready = false,
 		error = "Loading…",
