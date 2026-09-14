@@ -2,6 +2,7 @@
   "title": "Token Cafe",
   "tabs.dashboard": "Overview",
   "panel.open": "Open",
+  "panel.refresh": "Refresh now",
   "panel.refreshing": "Refreshing…",
   "panel.empty": "No data yet.",
   "panel.no_providers": "No providers enabled. Enable one in the plugin settings to populate the dashboard.",

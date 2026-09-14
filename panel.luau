@@ -14,6 +14,12 @@ local feedback = ""
 local feedbackError = false
 local dirty = true
 local requestCounter = 0
+local refreshPhase = 0
+
+local REFRESH_GLYPHS = { "loader-quarter", "loader-3", "loader-2", "loader" }
+local REFRESH_OPACITY = { 0.55, 0.78, 1.0, 0.78 }
+local REFRESH_UPDATE_MS = 100
+local IDLE_UPDATE_MS = 1000
 
 local render
 
@@ -66,16 +72,140 @@ local function quotaRows(p)
 	return rows
 end
 
+local HISTORY_DAYS = 15
+local HISTORY_BAR_MAX_H = 56
+local HISTORY_BAR_W = 16
+
+-- Last N calendar days ending today, zero-filled from p.recentDays.
+-- Uses tokens, falling back to messages (Claude reports messages only).
+local function historySeries(p)
+	local byDate = {}
+	local tokenSum = 0
+	if type(p.recentDays) == "table" then
+		for _, d in ipairs(p.recentDays) do
+			if type(d) == "table" then
+				local key = tostring(d.date or "")
+				if key ~= "" then
+					local tokens = tonumber(d.tokens) or 0
+					local messages = tonumber(d.messages) or 0
+					byDate[key] = { tokens = tokens, messages = messages }
+					tokenSum += tokens
+				end
+			end
+		end
+	end
+	local useMessages = tokenSum <= 0
+	local now = os.time()
+	local series = {}
+	for i = HISTORY_DAYS - 1, 0, -1 do
+		local t = now - i * 86400
+		local key = os.date("%Y-%m-%d", t)
+		local entry = byDate[key]
+		local v = 0
+		if entry then
+			v = useMessages and (entry.messages or 0) or (entry.tokens or 0)
+		end
+		table.insert(series, {
+			date = key,
+			day = os.date("%d", t),
+			month = os.date("%b", t),
+			monthKey = os.date("%Y-%m", t),
+			value = math.max(0, math.floor(tonumber(v) or 0)),
+			isToday = i == 0,
+		})
+	end
+	return series, useMessages
+end
+
+-- True when p.recentDays carries any non-zero usage (tokens or messages).
+-- Providers without history (e.g. Grok billing snapshot) skip the chart
+-- instead of rendering an empty one.
+local function hasHistoryData(p)
+	if type(p) ~= "table" or type(p.recentDays) ~= "table" then
+		return false
+	end
+	for _, d in ipairs(p.recentDays) do
+		if type(d) == "table" then
+			if (tonumber(d.tokens) or 0) > 0 or (tonumber(d.messages) or 0) > 0 then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function historyChart(p)
+	local series, useMessages = historySeries(p)
+	local max = 0
+	for _, s in ipairs(series) do
+		if s.value > max then
+			max = s.value
+		end
+	end
+	if max <= 0 then
+		max = 1
+	end
+	local bars = {}
+	local prevMonthKey = nil
+	for _, s in ipairs(series) do
+		local frac = s.value / max
+		local h = math.floor(frac * HISTORY_BAR_MAX_H + 0.5)
+		if h < 3 then
+			h = 3
+		end
+		local fill = "surface_variant"
+		if s.value > 0 then
+			fill = s.isToday and "tertiary" or "primary"
+		end
+		-- Month separator: show the 3-letter month under the first bar
+		-- of the window and wherever the month rolls over. A blank
+		-- placeholder keeps the rows aligned on the other days.
+		local showMonth = prevMonthKey == nil or s.monthKey ~= prevMonthKey
+		prevMonthKey = s.monthKey
+		table.insert(bars, ui.column({ key = "hist-" .. s.date, gap = 1, align = "center", flexGrow = 1 }, {
+			ui.box({ fill = fill, width = HISTORY_BAR_W, height = h, radius = 2 }),
+			ui.label({
+				text = s.day,
+				fontSize = 9,
+				color = s.isToday and "tertiary" or "on_surface_variant",
+				fontWeight = s.isToday and "bold" or nil,
+			}),
+			ui.label({
+				text = showMonth and s.month or " ",
+				fontSize = 8,
+				color = "on_surface_variant/0.7",
+			}),
+		}))
+	end
+	local unit = useMessages and (tostring(max) .. " msgs max") or (format.formatTokens(max) .. " max")
+	return ui.column({
+		gap = 4,
+		align = "stretch",
+		padding = 10,
+		fill = "surface_variant/0.25",
+		radius = 8,
+		border = "surface_variant/0.6",
+		borderWidth = 1,
+	}, {
+		ui.row({ align = "center" }, {
+			ui.label({ text = noctalia.tr("panel.history"), fontWeight = "bold", fontSize = 12, flexGrow = 1 }),
+			ui.label({ text = "Last " .. tostring(HISTORY_DAYS) .. " days · " .. unit, fontSize = 11, color = "on_surface_variant" }),
+		}),
+		ui.row({ gap = 4, align = "end" }, bars),
+	})
+end
+
 local function quotaRow(label, pct, resetIso)
 	local reset = format.resetLabel(resetIso, os.time())
 	local sub = format.pctText(pct) .. (reset ~= "" and (" · resets " .. reset) or "")
-	return ui.column({ gap = 2, align = "stretch" }, {
+	local value = math.min(1, math.max(0, tonumber(pct) or 0))
+	return ui.column({ gap = 4, align = "stretch" }, {
 		ui.row({ align = "center" }, {
 			ui.label({ text = label, fontSize = 12, color = "on_surface_variant", flexGrow = 1, maxLines = 1 }),
 			ui.label({ text = format.pctText(pct), fontSize = 12, fontWeight = "bold", color = format.usageColor(pct) }),
 		}),
+		ui.progress({ progress = value, fill = format.usageColor(pct), track = "surface_variant", radius = 3, height = 6 }),
 		ui.label({ text = sub, fontSize = 11, color = "on_surface_variant", visible = reset ~= "" }),
-		ui.progress({ progress = math.min(1, math.max(0, tonumber(pct) or 0)), fill = format.usageColor(pct) }),
 	})
 end
 
@@ -146,6 +276,13 @@ local function detailView(p)
 			ui.label({ text = "Tier: " .. p.tier, fontSize = 12, visible = (p.tier or "") ~= "" }),
 		}))
 	end
+	local resetCount = tonumber(p.resetCreditsAvailable) or -1
+	if resetCount >= 0 then
+		table.insert(nodes, ui.row({ align = "center" }, {
+			ui.label({ text = "Reset credits", fontSize = 12, color = "on_surface_variant", flexGrow = 1 }),
+			ui.label({ text = tostring(math.floor(resetCount)), fontSize = 12 }),
+		}))
+	end
 	if (p.todayTokens or 0) > 0 or (p.todayPrompts or 0) > 0 then
 		table.insert(nodes, ui.label({
 			text = noctalia.tr("panel.today", {
@@ -179,32 +316,8 @@ local function detailView(p)
 		end
 		table.insert(nodes, ui.column({ gap = 3, align = "stretch" }, mrows))
 	end
-	if type(p.recentDays) == "table" and #p.recentDays > 0 then
-		local days = {}
-		for _, d in ipairs(p.recentDays) do
-			table.insert(days, tonumber(d.tokens) or 0)
-		end
-		local max = 1
-		for _, v in ipairs(days) do
-			if v > max then
-				max = v
-			end
-		end
-		local norm = {}
-		for _, v in ipairs(days) do
-			table.insert(norm, v / max)
-		end
-		table.insert(nodes, ui.column({ gap = 4, align = "stretch" }, {
-			ui.label({ text = noctalia.tr("panel.history"), fontWeight = "bold", fontSize = 12 }),
-			ui.graph({ values = norm, width = 480, height = 64 }),
-		}))
-	end
-	if p.ready ~= true then
-		table.insert(nodes, ui.label({
-			text = (p.error and p.error ~= "") and p.error or noctalia.tr("panel.empty"),
-			color = "error",
-			fontSize = 12,
-		}))
+	if hasHistoryData(p) then
+		table.insert(nodes, historyChart(p))
 	end
 	return ui.column({ gap = 10, align = "stretch" }, nodes)
 end
@@ -267,12 +380,12 @@ render = function()
 	end
 
 	local notes = {}
-	if snapshot.refreshing == true then
-		table.insert(notes, ui.label({ text = noctalia.tr("panel.refreshing"), color = "primary", fontSize = 11 }))
-	end
 	if feedback ~= "" then
 		table.insert(notes, ui.label({ text = feedback, color = feedbackError and "error" or "tertiary", fontSize = 11 }))
 	end
+	local refreshing = snapshot.refreshing == true
+	local refreshIndex = (refreshPhase % #REFRESH_GLYPHS) + 1
+	noctalia.setUpdateInterval(refreshing and REFRESH_UPDATE_MS or IDLE_UPDATE_MS)
 
 	panel.render(ui.column({ gap = 10, flexGrow = 1 }, {
 		ui.row({ gap = 8, align = "center" }, {
@@ -289,18 +402,30 @@ render = function()
 					color = "on_surface_variant",
 				}),
 			}),
-			ui.button({ glyph = "refresh", variant = "ghost", onClick = "onRefresh" }),
+			ui.button({
+				key = "refresh",
+				glyph = refreshing and REFRESH_GLYPHS[refreshIndex] or "refresh",
+				variant = "ghost",
+				enabled = not refreshing,
+				opacity = refreshing and REFRESH_OPACITY[refreshIndex] or 1,
+				tooltip = refreshing and noctalia.tr("panel.refreshing") or noctalia.tr("panel.refresh"),
+				onClick = "onRefresh",
+			}),
 			ui.button({ glyph = "close", variant = "ghost", onClick = "onClose" }),
 		}),
 		ui.row({ gap = 4, align = "center" }, tabs),
-		ui.column({ gap = 2, align = "stretch" }, notes),
+		ui.column({ gap = 2, align = "stretch", visible = feedback ~= "" }, notes),
 		ui.scroll({ key = "scroll-" .. tab, flexGrow = 1, gap = 8, align = "stretch" }, { content }),
-		ui.label({
-			text = (tonumber(snapshot.updatedAt) or 0) > 0
-					and noctalia.tr("panel.updated", { time = noctalia.formatTime("%H:%M:%S", snapshot.updatedAt) })
-				or "",
-			color = "on_surface_variant",
-			fontSize = 11,
+		ui.row({ align = "center" }, {
+			ui.spacer({ flexGrow = 1 }),
+			ui.label({
+				text = (tonumber(snapshot.updatedAt) or 0) > 0
+						and noctalia.tr("panel.updated", { time = noctalia.formatTime("%H:%M:%S", snapshot.updatedAt) })
+					or "",
+				color = "on_surface_variant",
+				fontSize = 11,
+				textAlign = "end",
+			}),
 		}),
 	}))
 end
@@ -323,8 +448,14 @@ noctalia.state.watch(RESULT_KEY, function(result)
 	if type(result.requestId) ~= "string" or not result.requestId:match("^panel%-") then
 		return
 	end
-	feedback = tostring(result.message or "")
-	feedbackError = result.ok ~= true
+	if result.ok == true then
+		-- Refresh progress is represented by the header control, not a status label.
+		feedback = ""
+		feedbackError = false
+	else
+		feedback = tostring(result.message or "")
+		feedbackError = true
+	end
 	dirty = true
 end)
 
@@ -335,6 +466,10 @@ function onOpen(_context)
 end
 
 function update()
+	if snapshot.refreshing == true then
+		refreshPhase = (refreshPhase + 1) % #REFRESH_GLYPHS
+		dirty = true
+	end
 	if dirty then
 		render()
 	end

@@ -8,6 +8,7 @@ icon = "coffee"
 description = "Subscription usage and remaining tokens for popular AI coding agents."
 tags = ["productivity", "ai", "bar", "panel", "service"]
 
+# ── General ────────────────────────────────────────────────────────────────
 [[setting]]
 key = "refresh_interval"
 type = "int"
@@ -35,6 +36,7 @@ description_key = "settings.probe_bin.description"
 default = ""
 advanced = true
 
+# ── Codex ──────────────────────────────────────────────────────────────────
 [[setting]]
 key = "codex_enabled"
 type = "bool"
@@ -49,7 +51,9 @@ label_key = "settings.codex_bin.label"
 description_key = "settings.codex_bin.description"
 default = "codex"
 advanced = true
+visible_when = { key = "codex_enabled", values = ["true"] }
 
+# ── Claude Code ────────────────────────────────────────────────────────────
 [[setting]]
 key = "claude_enabled"
 type = "bool"
@@ -64,6 +68,7 @@ label_key = "settings.claude_stats_path.label"
 description_key = "settings.claude_stats_path.description"
 default = "~/.claude/stats-cache.json"
 advanced = true
+visible_when = { key = "claude_enabled", values = ["true"] }
 
 [[setting]]
 key = "claude_creds_path"
@@ -72,7 +77,9 @@ label_key = "settings.claude_creds_path.label"
 description_key = "settings.claude_creds_path.description"
 default = "~/.claude/.credentials.json"
 advanced = true
+visible_when = { key = "claude_enabled", values = ["true"] }
 
+# ── Google Antigravity ─────────────────────────────────────────────────────
 [[setting]]
 key = "antigravity_enabled"
 type = "bool"
@@ -87,6 +94,7 @@ label_key = "settings.antigravity_db.label"
 description_key = "settings.antigravity_db.description"
 default = "~/.config/Antigravity/User/globalStorage/state.vscdb"
 advanced = true
+visible_when = { key = "antigravity_enabled", values = ["true"] }
 
 [[setting]]
 key = "antigravity_project"
@@ -95,7 +103,9 @@ label_key = "settings.antigravity_project.label"
 description_key = "settings.antigravity_project.description"
 default = ""
 advanced = true
+visible_when = { key = "antigravity_enabled", values = ["true"] }
 
+# ── OpenCode ─────────────────────────────────────────────────────────────────
 [[setting]]
 key = "opencode_enabled"
 type = "bool"
@@ -110,7 +120,9 @@ label_key = "settings.opencode_bin.label"
 description_key = "settings.opencode_bin.description"
 default = "opencode"
 advanced = true
+visible_when = { key = "opencode_enabled", values = ["true"] }
 
+# ── OpenRouter ───────────────────────────────────────────────────────────────
 [[setting]]
 key = "openrouter_enabled"
 type = "bool"
@@ -124,7 +136,9 @@ type = "string"
 label_key = "settings.openrouter_key.label"
 description_key = "settings.openrouter_key.description"
 default = ""
+visible_when = { key = "openrouter_enabled", values = ["true"] }
 
+# ── Grok Build ───────────────────────────────────────────────────────────────
 [[setting]]
 key = "grok_enabled"
 type = "bool"
@@ -139,7 +153,9 @@ label_key = "settings.grok_bin.label"
 description_key = "settings.grok_bin.description"
 default = "grok"
 advanced = true
+visible_when = { key = "grok_enabled", values = ["true"] }
 
+# ── Venice ───────────────────────────────────────────────────────────────────
 [[setting]]
 key = "venice_enabled"
 type = "bool"
@@ -153,6 +169,7 @@ type = "string"
 label_key = "settings.venice_keys.label"
 description_key = "settings.venice_keys.description"
 default = ""
+visible_when = { key = "venice_enabled", values = ["true"] }
 
 [[widget]]
 id = "bar"

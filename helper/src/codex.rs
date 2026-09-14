@@ -100,6 +100,7 @@ fn base() -> Value {
         "dailyUsageBuckets": [],
         "lifetimeTokens": 0,
         "resetCreditsAvailable": -1,
+        "resetCredits": [],
         "resetForecastPercent": -1,
         "tierLabel": "",
         "balanceLabel": "",
@@ -158,8 +159,19 @@ fn probe_inner(cli_bin: &str, deadline: Instant) -> Result<Value> {
     let reset_count = num(reset_credits.get("availableCount"), -1.0) as i64;
     if reset_count >= 0 {
         out["resetCreditsAvailable"] = json!(reset_count);
-        out["balanceLabel"] = Value::from("Reset credits");
-        out["balanceValue"] = Value::from(reset_count.to_string());
+        if let Some(credits) = reset_credits.get("credits").and_then(|v| v.as_array()) {
+            let rows: Vec<Value> = credits
+                .iter()
+                .filter(|credit| credit.is_object())
+                .map(|credit| {
+                    json!({
+                        "id": credit.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                        "expiresAt": iso_timestamp(credit.get("expiresAt")),
+                    })
+                })
+                .collect();
+            out["resetCredits"] = Value::from(rows);
+        }
     }
 
     // Today is computed in the *local* timezone (YYYY-MM-DD compare).

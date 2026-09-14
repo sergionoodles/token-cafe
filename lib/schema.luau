@@ -53,6 +53,8 @@ function M.blank(id)
 		tier = "",
 		balanceLabel = "",
 		balanceValue = "",
+		resetCreditsAvailable = -1,
+		resetCredits = {},
 		todayTokens = 0,
 		todayPrompts = 0,
 		todaySessions = 0,
@@ -110,6 +112,17 @@ function M.fromProbe(id, data)
 	p.tier = str(data.tierLabel or "")
 	p.balanceLabel = str(data.balanceLabel or "")
 	p.balanceValue = str(data.balanceValue or "")
+	p.resetCreditsAvailable = num(data.resetCreditsAvailable, -1)
+	if type(data.resetCredits) == "table" then
+		for _, credit in ipairs(data.resetCredits) do
+			if type(credit) == "table" then
+				table.insert(p.resetCredits, {
+					id = str(credit.id),
+					expiresAt = str(credit.expiresAt),
+				})
+			end
+		end
+	end
 	p.todayTokens = math.floor(num(data.todayTotalTokens, 0))
 	p.todayPrompts = math.floor(num(data.todayPrompts, 0))
 	p.todaySessions = math.floor(num(data.todaySessions, 0))

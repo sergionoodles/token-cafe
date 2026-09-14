@@ -54,12 +54,8 @@ function M.refresh(done)
 		p.todayPrompts = prompts
 		p.todaySessions = sessions
 		local det = {}
-		if p.balanceValue ~= "" then
-			table.insert(det, { k = p.balanceLabel ~= "" and p.balanceLabel or "Balance", v = p.balanceValue })
-		end
-		if p.tier ~= "" then
-			table.insert(det, { k = "Plan", v = p.tier })
-		end
+		-- Keep the plan out of the Codex detail view.
+		p.tier = ""
 		p.details = det
 		done(p)
 	end)
