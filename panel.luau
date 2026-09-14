@@ -422,6 +422,13 @@ render = function()
 				tooltip = refreshing and noctalia.tr("panel.refreshing") or noctalia.tr("panel.refresh"),
 				onClick = "onRefresh",
 			}),
+			ui.button({
+				key = "settings",
+				glyph = "settings",
+				variant = "ghost",
+				tooltip = noctalia.tr("panel.configure"),
+				onClick = "onConfigure",
+			}),
 			ui.button({ glyph = "close", variant = "ghost", onClick = "onClose" }),
 		}),
 		ui.row({ gap = 4, align = "center" }, tabs),
