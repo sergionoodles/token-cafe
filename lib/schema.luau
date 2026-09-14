@@ -58,6 +58,7 @@ function M.blank(id)
 		todayTokens = 0,
 		todayPrompts = 0,
 		todaySessions = 0,
+		lastUsedAt = 0,
 		details = {},
 		topModels = {},
 		recentDays = {},
@@ -126,6 +127,7 @@ function M.fromProbe(id, data)
 	p.todayTokens = math.floor(num(data.todayTotalTokens, 0))
 	p.todayPrompts = math.floor(num(data.todayPrompts, 0))
 	p.todaySessions = math.floor(num(data.todaySessions, 0))
+	p.lastUsedAt = math.floor(num(data.lastUsedAt or data.lastActivityAt, 0))
 	if type(data.todayTokensByModel) == "table" then
 		local rows = {}
 		for model, toks in pairs(data.todayTokensByModel) do

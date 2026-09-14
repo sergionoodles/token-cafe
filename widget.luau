@@ -1,6 +1,6 @@
 --!nonstrict
 -- Token Cafe bar widget: compact multi-provider glance.
--- Shows up to `bar_provider_limit` ready meters + overflow count.
+-- Shows up to `bar_provider_limit` ready meters (0 = icon only).
 
 local PANEL_ID = "codingnoodles/token-cafe:panel"
 local STATE_KEY = "tc_snapshot"
@@ -14,7 +14,15 @@ local requestId = 0
 
 local function limit()
 	local n = tonumber(noctalia.getConfig("bar_provider_limit")) or 2
-	return math.max(1, math.min(4, math.floor(n)))
+	return math.max(0, math.min(4, math.floor(n)))
+end
+
+local function sortMode()
+	local m = tostring(noctalia.getConfig("bar_sort_mode") or "usage")
+	if m == "name" or m == "recent" then
+		return m
+	end
+	return "usage"
 end
 
 local function statusColor(p)
@@ -32,40 +40,66 @@ local function render()
 			table.insert(ready, p)
 		end
 	end
-	table.sort(ready, function(a, b)
-		return (tonumber(a.primaryPct) or -1) > (tonumber(b.primaryPct) or -1)
-	end)
+	local mode = sortMode()
+	if mode == "name" then
+		table.sort(ready, function(a, b)
+			return tostring(a.name or a.id or ""):lower() < tostring(b.name or b.id or ""):lower()
+		end)
+	elseif mode == "recent" then
+		table.sort(ready, function(a, b)
+			local la = math.floor(tonumber(a.lastUsedAt) or 0)
+			local lb = math.floor(tonumber(b.lastUsedAt) or 0)
+			if la ~= lb then
+				return la > lb
+			end
+			local ta = (tonumber(a.todayTokens) or 0) + (tonumber(a.todayPrompts) or 0)
+			local tb = (tonumber(b.todayTokens) or 0) + (tonumber(b.todayPrompts) or 0)
+			if ta ~= tb then
+				return ta > tb
+			end
+			local pa = tonumber(a.primaryPct) or -1
+			local pb = tonumber(b.primaryPct) or -1
+			if pa ~= pb then
+				return pa > pb
+			end
+			return tostring(a.name or a.id or ""):lower() < tostring(b.name or b.id or ""):lower()
+		end)
+	else
+		table.sort(ready, function(a, b)
+			return (tonumber(a.primaryPct) or -1) > (tonumber(b.primaryPct) or -1)
+		end)
+	end
 
 	local children = {
 		ui.glyph({ name = "coffee", size = 15 }),
 	}
 	local shown = limit()
+	local dividerOrientation = barWidget.isVertical() and "horizontal" or "vertical"
 	for i = 1, math.min(shown, #ready) do
+		if i > 1 then
+			table.insert(children, ui.separator({
+				orientation = dividerOrientation,
+				color = "on_surface_variant/0.35",
+				thickness = 1,
+				spacing = 2,
+			}))
+		end
 		local p = ready[i]
 		table.insert(children, ui.label({
 			text = format.pctText(p.primaryPct),
 			fontWeight = "bold",
 			color = statusColor(p),
 		}))
-		table.insert(children, ui.box({
-			width = 7,
-			height = 7,
-			radius = 4,
-			fill = statusColor(p),
-		}))
-	end
-	if #ready > shown then
-		table.insert(children, ui.label({
-			text = "+" .. tostring(#ready - shown),
-			color = "on_surface_variant",
-		}))
 	end
 	if #providers == 0 then
 		table.insert(children, ui.label({ text = "—", color = "on_surface_variant" }))
 	elseif #ready == 0 then
 		local n = schema.readyCount(providers)
+		-- "…" only on the very first load (revision 0). Background
+		-- refreshes keep the last-known "n/total" silently.
+		local isFirstLoad = (tonumber(snapshot.revision) or 0) == 0
 		table.insert(children, ui.label({
-			text = snapshot.refreshing == true and "…" or (n .. "/" .. #providers),
+			text = (snapshot.refreshing == true and isFirstLoad) and "…" or (n .. "/" .. #providers),
 			color = "on_surface_variant",
 		}))
 	end

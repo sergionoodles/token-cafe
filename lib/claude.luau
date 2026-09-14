@@ -97,12 +97,16 @@ local function parseHistory(p)
 	local lt = os.date("*t", now)
 	local dayStart = os.time({ year = lt.year, month = lt.month, day = lt.day, hour = 0 })
 	local prompts = 0
+	local lastUsed = 0
 	local sessions = {}
 	for line in (tostring(raw) .. "\n"):gmatch("(.-)\n") do
 		if line:match("%S") then
 			local ok, entry = pcall(noctalia.json.decode, line)
 			if ok and type(entry) == "table" then
 				local ts = math.floor((tonumber(entry.timestamp) or 0) / 1000)
+				if ts > 0 and ts > lastUsed then
+					lastUsed = ts
+				end
 				if ts >= dayStart then
 					prompts += 1
 					if entry.sessionId and entry.sessionId ~= "" then
@@ -118,6 +122,7 @@ local function parseHistory(p)
 	end
 	p.todayPrompts = prompts
 	p.todaySessions = n
+	p.lastUsedAt = lastUsed
 end
 
 local function normPct(v)

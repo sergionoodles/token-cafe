@@ -54,5 +54,10 @@
   "settings.venice_keys.label": "Venice API keys",
   "settings.venice_keys.description": "Comma-separated keys. VENICE_API_KEY env var is included automatically.",
   "settings.bar_provider_limit.label": "Meters on bar",
-  "settings.bar_provider_limit.description": "Number of provider meters shown in the bar. The panel and tooltip always include all providers."
+  "settings.bar_provider_limit.description": "Number of provider meters shown in the bar (0 = icon only). The panel and tooltip always include all providers.",
+  "settings.bar_sort_mode.label": "Bar sort order",
+  "settings.bar_sort_mode.description": "Which providers fill the bar meters: highest usage, alphabetical, or most recently used.",
+  "settings.bar_sort_mode.options.usage": "Highest usage",
+  "settings.bar_sort_mode.options.name": "Name (A–Z)",
+  "settings.bar_sort_mode.options.recent": "Most recently used"
 }

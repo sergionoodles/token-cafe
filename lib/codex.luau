@@ -16,18 +16,22 @@ local function countHistory()
 	local path = noctalia.expandPath("~/.codex/history.jsonl")
 	local raw = noctalia.readFile(path)
 	if not raw then
-		return 0, 0
+		return 0, 0, 0
 	end
 	local now = os.time()
 	local lt = os.date("*t", now)
 	local dayStart = os.time({ year = lt.year, month = lt.month, day = lt.day, hour = 0 })
 	local prompts = 0
+	local lastUsed = 0
 	local sessions = {}
 	for line in (tostring(raw) .. "\n"):gmatch("(.-)\n") do
 		if line:match("%S") then
 			local ok, entry = pcall(noctalia.json.decode, line)
 			if ok and type(entry) == "table" then
 				local ts = tonumber(entry.ts) or 0
+				if ts > 0 and ts > lastUsed then
+					lastUsed = math.floor(ts)
+				end
 				if ts >= dayStart then
 					prompts += 1
 					if entry.session_id and entry.session_id ~= "" then
@@ -41,7 +45,7 @@ local function countHistory()
 	for _ in pairs(sessions) do
 		n += 1
 	end
-	return prompts, n
+	return prompts, n, lastUsed
 end
 
 function M.refresh(done)
@@ -50,9 +54,10 @@ function M.refresh(done)
 		return
 	end
 	runner.runCliProbe("codex", function(p)
-		local prompts, sessions = countHistory()
+		local prompts, sessions, lastUsed = countHistory()
 		p.todayPrompts = prompts
 		p.todaySessions = sessions
+		p.lastUsedAt = lastUsed
 		local det = {}
 		-- Keep the plan out of the Codex detail view.
 		p.tier = ""

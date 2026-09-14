@@ -31,6 +31,11 @@ local snapshot = {
 local generation = 0
 local pending = false
 
+-- Last-seen activity per provider for "most recently used" ordering.
+-- Tracks counter increases across refreshes so API-only providers
+-- (no local history timestamps) still get a recency signal.
+local lastActivity = {}
+
 local function refreshIntervalMs()
 	local sec = tonumber(noctalia.getConfig("refresh_interval")) or 300
 	sec = math.max(60, math.min(3600, math.floor(sec)))
@@ -66,10 +71,43 @@ local function refreshAll()
 	pending = true
 	generation += 1
 	local gen = generation
-	seedBlanks()
-	snapshot.refreshing = true
-	snapshot.updatedAt = os.time()
-	publish()
+	-- First load seeds blanks so the bar can show "…" while loading.
+	-- Background refreshes keep last-known providers visible so the
+	-- bar updates silently without flickering to "…".
+	local isFirstLoad = #snapshot.providers == 0
+	if isFirstLoad then
+		seedBlanks()
+		snapshot.refreshing = true
+		snapshot.updatedAt = os.time()
+		publish()
+	else
+		local byId = {}
+		for _, p in ipairs(snapshot.providers) do
+			if type(p) == "table" and p.id ~= nil then
+				byId[p.id] = p
+			end
+		end
+		local providers = {}
+		for _, mod in ipairs(MODULES) do
+			if mod.isEnabled() then
+				if byId[mod.id] then
+					table.insert(providers, byId[mod.id])
+				else
+					table.insert(providers, schema.blank(mod.id))
+				end
+			end
+		end
+		local order = {}
+		for i, id in ipairs(schema.ORDER) do
+			order[id] = i
+		end
+		table.sort(providers, function(a, b)
+			return (order[a.id] or 99) < (order[b.id] or 99)
+		end)
+		snapshot.providers = providers
+		snapshot.refreshing = true
+		publish()
+	end
 
 	local active = {}
 	for _, mod in ipairs(MODULES) do
@@ -89,6 +127,41 @@ local function refreshAll()
 	local remaining = #active
 	local results = {}
 
+	local function stampRecency(p)
+		if type(p) ~= "table" then
+			return
+		end
+		local now = os.time()
+		local tokens = math.floor(tonumber(p.todayTokens) or 0)
+		local prompts = math.floor(tonumber(p.todayPrompts) or 0)
+		local sessions = math.floor(tonumber(p.todaySessions) or 0)
+		local probeLast = math.floor(tonumber(p.lastUsedAt) or 0)
+		local prev = lastActivity[p.id]
+		if prev then
+			if tokens > (prev.tokens or 0) or prompts > (prev.prompts or 0) or sessions > (prev.sessions or 0) then
+				p.lastUsedAt = now
+			elseif (prev.lastUsedAt or 0) > probeLast then
+				p.lastUsedAt = prev.lastUsedAt
+			else
+				p.lastUsedAt = probeLast
+			end
+		else
+			if probeLast > 0 then
+				p.lastUsedAt = probeLast
+			elseif tokens > 0 or prompts > 0 or sessions > 0 then
+				p.lastUsedAt = now
+			else
+				p.lastUsedAt = 0
+			end
+		end
+		lastActivity[p.id] = {
+			tokens = tokens,
+			prompts = prompts,
+			sessions = sessions,
+			lastUsedAt = math.floor(tonumber(p.lastUsedAt) or 0),
+		}
+	end
+
 	local function finish()
 		if gen ~= generation then
 			return
@@ -104,6 +177,7 @@ local function refreshAll()
 		local providers = {}
 		for _, p in ipairs(results) do
 			if type(p) == "table" then
+				stampRecency(p)
 				table.insert(providers, p)
 			end
 		end
