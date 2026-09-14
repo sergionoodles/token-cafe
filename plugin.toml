@@ -1,0 +1,182 @@
+id = "codingnoodles/token-cafe"
+name = "Token Cafe"
+version = "0.1.0"
+plugin_api = 24
+author = "codingnoodles"
+license = "MIT"
+icon = "coffee"
+description = "Subscription usage and remaining tokens for popular AI coding agents."
+tags = ["productivity", "ai", "bar", "panel", "service"]
+
+[[setting]]
+key = "refresh_interval"
+type = "int"
+label_key = "settings.refresh_interval.label"
+description_key = "settings.refresh_interval.description"
+default = 300
+min = 60
+max = 3600
+
+[[setting]]
+key = "probe_timeout_sec"
+type = "int"
+label_key = "settings.probe_timeout_sec.label"
+description_key = "settings.probe_timeout_sec.description"
+default = 25
+min = 5
+max = 60
+advanced = true
+
+[[setting]]
+key = "probe_bin"
+type = "string"
+label_key = "settings.probe_bin.label"
+description_key = "settings.probe_bin.description"
+default = ""
+advanced = true
+
+[[setting]]
+key = "codex_enabled"
+type = "bool"
+label_key = "settings.codex_enabled.label"
+description_key = "settings.codex_enabled.description"
+default = false
+
+[[setting]]
+key = "codex_bin"
+type = "string"
+label_key = "settings.codex_bin.label"
+description_key = "settings.codex_bin.description"
+default = "codex"
+advanced = true
+
+[[setting]]
+key = "claude_enabled"
+type = "bool"
+label_key = "settings.claude_enabled.label"
+description_key = "settings.claude_enabled.description"
+default = false
+
+[[setting]]
+key = "claude_stats_path"
+type = "string"
+label_key = "settings.claude_stats_path.label"
+description_key = "settings.claude_stats_path.description"
+default = "~/.claude/stats-cache.json"
+advanced = true
+
+[[setting]]
+key = "claude_creds_path"
+type = "string"
+label_key = "settings.claude_creds_path.label"
+description_key = "settings.claude_creds_path.description"
+default = "~/.claude/.credentials.json"
+advanced = true
+
+[[setting]]
+key = "antigravity_enabled"
+type = "bool"
+label_key = "settings.antigravity_enabled.label"
+description_key = "settings.antigravity_enabled.description"
+default = false
+
+[[setting]]
+key = "antigravity_db"
+type = "string"
+label_key = "settings.antigravity_db.label"
+description_key = "settings.antigravity_db.description"
+default = "~/.config/Antigravity/User/globalStorage/state.vscdb"
+advanced = true
+
+[[setting]]
+key = "antigravity_project"
+type = "string"
+label_key = "settings.antigravity_project.label"
+description_key = "settings.antigravity_project.description"
+default = ""
+advanced = true
+
+[[setting]]
+key = "opencode_enabled"
+type = "bool"
+label_key = "settings.opencode_enabled.label"
+description_key = "settings.opencode_enabled.description"
+default = false
+
+[[setting]]
+key = "opencode_bin"
+type = "string"
+label_key = "settings.opencode_bin.label"
+description_key = "settings.opencode_bin.description"
+default = "opencode"
+advanced = true
+
+[[setting]]
+key = "openrouter_enabled"
+type = "bool"
+label_key = "settings.openrouter_enabled.label"
+description_key = "settings.openrouter_enabled.description"
+default = false
+
+[[setting]]
+key = "openrouter_key"
+type = "string"
+label_key = "settings.openrouter_key.label"
+description_key = "settings.openrouter_key.description"
+default = ""
+
+[[setting]]
+key = "grok_enabled"
+type = "bool"
+label_key = "settings.grok_enabled.label"
+description_key = "settings.grok_enabled.description"
+default = false
+
+[[setting]]
+key = "grok_bin"
+type = "string"
+label_key = "settings.grok_bin.label"
+description_key = "settings.grok_bin.description"
+default = "grok"
+advanced = true
+
+[[setting]]
+key = "venice_enabled"
+type = "bool"
+label_key = "settings.venice_enabled.label"
+description_key = "settings.venice_enabled.description"
+default = false
+
+[[setting]]
+key = "venice_keys"
+type = "string"
+label_key = "settings.venice_keys.label"
+description_key = "settings.venice_keys.description"
+default = ""
+
+[[widget]]
+id = "bar"
+entry = "widget.luau"
+
+  [[widget.setting]]
+  key = "bar_provider_limit"
+  type = "int"
+  label_key = "settings.bar_provider_limit.label"
+  description_key = "settings.bar_provider_limit.description"
+  default = 2
+  min = 1
+  max = 4
+
+[[panel]]
+id = "panel"
+entry = "panel.luau"
+width = 720
+height = 640
+placement = "floating"
+position = "center"
+open_near_click = true
+dismiss_on_outside_click = true
+
+[[service]]
+id = "service"
+entry = "service.luau"
