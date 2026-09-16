@@ -372,7 +372,7 @@ pub fn iso_timestamp(v: Option<&Value>) -> String {
     }
 }
 
-fn parse_iso_to_ms(s: &str) -> std::result::Result<i64, ()> {
+pub fn parse_iso_to_ms(s: &str) -> std::result::Result<i64, ()> {
     let s = s.trim();
     // Split trailing zone: Z or ±HH:MM / ±HHMM.
     let (body, off_min): (&str, i64) = if s.ends_with('Z') || s.ends_with('z') {
@@ -421,6 +421,30 @@ fn parse_iso_to_ms(s: &str) -> std::result::Result<i64, ()> {
         return Err(());
     }
     Ok((days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + sec - off_min * 60) * 1000)
+}
+
+/// ISO-8601 string to epoch seconds, None when unparseable.
+pub fn parse_iso_to_epoch_secs(s: &str) -> Option<i64> {
+    parse_iso_to_ms(s).ok().map(|ms| ms.div_euclid(1000))
+}
+
+/// Epoch seconds to local `YYYY-MM-DD` via libc (DST-correct).
+pub fn epoch_to_local_day(epoch_secs: i64) -> String {
+    unsafe {
+        let t = epoch_secs as libc::time_t;
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&t, &mut tm);
+        format!("{:04}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday)
+    }
+}
+
+pub fn local_day_string(offset_days: i64) -> String {
+    unsafe {
+        let now = libc::time(std::ptr::null_mut()) + offset_days * 86400;
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&now, &mut tm);
+        format!("{:04}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday)
+    }
 }
 
 fn format_epoch_ms(ms: i64) -> String {

@@ -55,10 +55,132 @@ local function probeTimeoutMs()
 	return s * 1000 + 5000
 end
 
--- Last-seen activity per provider for "most recently used" ordering.
--- Tracks counter increases across refreshes so API-only providers
--- (no local history timestamps) still get a recency signal.
-local lastActivity = {}
+-- Custom provider order, persisted across restarts in the plugin data dir.
+-- The panel sends the full Overview order; the service sorts every
+-- snapshot by it so panel tabs + bar widget follow the same order.
+local customOrder = nil
+local publish -- forward: defined with snapshot below, used by applyReorder.
+
+local function orderFilePath()
+	local ok, dir = pcall(function()
+		return noctalia.pluginDataDir()
+	end)
+	if ok and type(dir) == "string" and dir ~= "" then
+		return dir .. "/provider_order.json"
+	end
+	return nil
+end
+
+local function loadCustomOrder()
+	local ids = {}
+	local path = orderFilePath()
+	if path ~= nil then
+		local ok, raw = pcall(function()
+			return noctalia.readFile(path)
+		end)
+		if ok and type(raw) == "string" and raw ~= "" then
+			local dok, decoded = pcall(function()
+				return noctalia.json.decode(raw)
+			end)
+			if dok and type(decoded) == "table" then
+				for _, v in ipairs(decoded) do
+					if type(v) == "string" and v ~= "" then
+						table.insert(ids, v)
+					end
+				end
+			end
+		end
+	end
+	local seen = {}
+	local merged = {}
+	for _, id in ipairs(ids) do
+		if not seen[id] then
+			seen[id] = true
+			table.insert(merged, id)
+		end
+	end
+	for _, id in ipairs(schema.ORDER) do
+		if not seen[id] then
+			seen[id] = true
+			table.insert(merged, id)
+		end
+	end
+	customOrder = merged
+end
+
+local function saveCustomOrder()
+	if type(customOrder) ~= "table" then
+		return
+	end
+	local path = orderFilePath()
+	if path == nil then
+		return
+	end
+	local ok, encoded = pcall(function()
+		return noctalia.json.encode(customOrder)
+	end)
+	if ok and type(encoded) == "string" then
+		pcall(function()
+			noctalia.writeFile(path, encoded)
+		end)
+	end
+end
+
+local function orderIndex()
+	if type(customOrder) ~= "table" then
+		loadCustomOrder()
+	end
+	local map = {}
+	for i, id in ipairs(customOrder) do
+		map[id] = i
+	end
+	return map
+end
+
+local function sortProviders(providers)
+	local index = orderIndex()
+	table.sort(providers, function(a, b)
+		return (index[a.id] or 99) < (index[b.id] or 99)
+	end)
+end
+
+local function applyReorder(newOrder)
+	if type(newOrder) ~= "table" then
+		return false
+	end
+	local cleaned = {}
+	local seen = {}
+	for _, v in ipairs(newOrder) do
+		if type(v) == "string" and v ~= "" and not seen[v] then
+			seen[v] = true
+			table.insert(cleaned, v)
+		end
+	end
+	if #cleaned == 0 then
+		return false
+	end
+	if type(customOrder) == "table" then
+		for _, id in ipairs(customOrder) do
+			if not seen[id] then
+				seen[id] = true
+				table.insert(cleaned, id)
+			end
+		end
+	end
+	for _, id in ipairs(schema.ORDER) do
+		if not seen[id] then
+			seen[id] = true
+			table.insert(cleaned, id)
+		end
+	end
+	customOrder = cleaned
+	saveCustomOrder()
+	if type(snapshot.providers) == "table" then
+		sortProviders(snapshot.providers)
+		publish()
+	end
+	return true
+end
 
 local function refreshIntervalMs()
 	local sec = tonumber(noctalia.getConfig("refresh_interval")) or 300
@@ -66,7 +188,7 @@ local function refreshIntervalMs()
 	return sec * 1000
 end
 
-local function publish()
+publish = function()
 	noctalia.state.set(STATE_KEY, snapshot)
 end
 
@@ -77,50 +199,9 @@ local function seedBlanks()
 			table.insert(providers, schema.blank(mod.id))
 		end
 	end
-	-- Stable registry order.
-	local order = {}
-	for i, id in ipairs(schema.ORDER) do
-		order[id] = i
-	end
-	table.sort(providers, function(a, b)
-		return (order[a.id] or 99) < (order[b.id] or 99)
-	end)
+	-- Custom Overview order.
+	sortProviders(providers)
 	snapshot.providers = providers
-end
-
-local function stampRecency(p)
-	if type(p) ~= "table" then
-		return
-	end
-	local now = os.time()
-	local tokens = math.floor(tonumber(p.todayTokens) or 0)
-	local prompts = math.floor(tonumber(p.todayPrompts) or 0)
-	local sessions = math.floor(tonumber(p.todaySessions) or 0)
-	local probeLast = math.floor(tonumber(p.lastUsedAt) or 0)
-	local prev = lastActivity[p.id]
-	if prev then
-		if tokens > (prev.tokens or 0) or prompts > (prev.prompts or 0) or sessions > (prev.sessions or 0) then
-			p.lastUsedAt = now
-		elseif (prev.lastUsedAt or 0) > probeLast then
-			p.lastUsedAt = prev.lastUsedAt
-		else
-			p.lastUsedAt = probeLast
-		end
-	else
-		if probeLast > 0 then
-			p.lastUsedAt = probeLast
-		elseif tokens > 0 or prompts > 0 or sessions > 0 then
-			p.lastUsedAt = now
-		else
-			p.lastUsedAt = 0
-		end
-	end
-	lastActivity[p.id] = {
-		tokens = tokens,
-		prompts = prompts,
-		sessions = sessions,
-		lastUsedAt = math.floor(tonumber(p.lastUsedAt) or 0),
-	}
 end
 
 -- Publish whatever has arrived; providers that never called back get a
@@ -142,20 +223,13 @@ local function finishRefresh()
 			table.insert(refreshResults, p)
 		end
 	end
-	local order = {}
-	for i, id in ipairs(schema.ORDER) do
-		order[id] = i
-	end
 	local providers = {}
 	for _, p in ipairs(refreshResults) do
 		if type(p) == "table" then
-			stampRecency(p)
 			table.insert(providers, p)
 		end
 	end
-	table.sort(providers, function(a, b)
-		return (order[a.id] or 99) < (order[b.id] or 99)
-	end)
+	sortProviders(providers)
 	snapshot.providers = providers
 	snapshot.refreshing = false
 	snapshot.updatedAt = os.time()
@@ -199,13 +273,7 @@ local function refreshAll()
 				end
 			end
 		end
-		local order = {}
-		for i, id in ipairs(schema.ORDER) do
-			order[id] = i
-		end
-		table.sort(providers, function(a, b)
-			return (order[a.id] or 99) < (order[b.id] or 99)
-		end)
+		sortProviders(providers)
 		snapshot.providers = providers
 		snapshot.refreshing = true
 		publish()
@@ -279,6 +347,17 @@ noctalia.state.watch(COMMAND_KEY, function(cmd)
 	if type(cmd) ~= "table" then
 		return
 	end
+	if cmd.action == "reorder" then
+		if applyReorder(cmd.order) then
+			noctalia.state.set(RESULT_KEY, {
+				requestId = tostring(cmd.requestId or ""),
+				action = "reorder",
+				ok = true,
+				message = "",
+			})
+		end
+		return
+	end
 	if cmd.action == "refresh" then
 		pending = false
 		refreshAll()
@@ -307,6 +386,7 @@ function onIpc(event, payload)
 end
 
 noctalia.setUpdateInterval(refreshIntervalMs())
+loadCustomOrder()
 refreshAll()
 
 function update()

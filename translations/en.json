@@ -1,7 +1,8 @@
 {
   "title": "Token Cafe",
   "tabs.dashboard": "Overview",
-  "panel.open": "Open",
+  "panel.move_up": "Move up",
+  "panel.move_down": "Move down",
   "panel.refresh": "Refresh now",
   "panel.refreshing": "Refreshing…",
   "panel.empty": "No data yet.",
@@ -31,6 +32,8 @@
   "settings.claude_stats_path.description": "Path to the Claude stats-cache.json file.",
   "settings.claude_creds_path.label": "Claude credentials path",
   "settings.claude_creds_path.description": "Path to the Claude .credentials.json file.",
+  "settings.claude_projects_path.label": "Claude projects path",
+  "settings.claude_projects_path.description": "Path to the Claude projects dir (transcript token history).",
   "settings.antigravity_enabled.label": "Google Antigravity",
   "settings.antigravity_enabled.description": "Local Antigravity IDE quota data.",
   "settings.antigravity_db.label": "Antigravity state DB",
@@ -54,10 +57,5 @@
   "settings.venice_keys.label": "Venice API keys",
   "settings.venice_keys.description": "Comma-separated keys. VENICE_API_KEY env var is included automatically.",
   "settings.bar_provider_limit.label": "Meters on bar",
-  "settings.bar_provider_limit.description": "Number of provider meters shown in the bar (0 = icon only). The panel and tooltip always include all providers.",
-  "settings.bar_sort_mode.label": "Bar sort order",
-  "settings.bar_sort_mode.description": "Which providers fill the bar meters: highest usage, alphabetical, or most recently used.",
-  "settings.bar_sort_mode.options.usage": "Highest usage",
-  "settings.bar_sort_mode.options.name": "Name (A–Z)",
-  "settings.bar_sort_mode.options.recent": "Most recently used"
+  "settings.bar_provider_limit.description": "Number of provider meters shown in the bar (0 = icon only), in Overview order. The panel and tooltip always include all providers."
 }

@@ -3,6 +3,7 @@
 -- authoritative OAuth usage endpoint (https://api.anthropic.com/api/oauth/usage).
 
 local schema = require("./schema.luau")
+local runner = require("./runner.luau")
 
 local M = {}
 M.id = "claude"
@@ -82,7 +83,7 @@ local function parseStats(p)
 				})
 			end
 		end
-		while #p.recentDays > 7 do
+		while #p.recentDays > 30 do
 			table.remove(p.recentDays, 1)
 		end
 	end
@@ -218,48 +219,123 @@ function M.refresh(done)
 	p.error = "Waiting for data"
 	parseStats(p)
 	parseHistory(p)
+	local historyLastUsed = tonumber(p.lastUsedAt) or 0
 
 	local credPath = noctalia.expandPath(trim(cfg("claude_creds_path", "~/.claude/.credentials.json")))
-	local raw = credPath ~= "" and noctalia.readFile(credPath) or nil
-	if not raw then
-		p.error = "Waiting for auth"
-		done(p)
-		return
-	end
-	local ok, data = pcall(noctalia.json.decode, raw)
-	if not ok or type(data) ~= "table" then
-		p.error = "Waiting for auth"
-		done(p)
-		return
-	end
-	local oauth = data.claudeAiOauth
-	if type(oauth) ~= "table" then
-		p.error = "Waiting for auth"
-		done(p)
-		return
-	end
-	local token = tostring(oauth.accessToken or "")
-	if token == "" then
-		p.error = "Waiting for auth"
-		done(p)
-		return
-	end
-	local expires = tonumber(oauth.expiresAt) or 0
-	if expires > 0 and expires <= os.time() * 1000 then
-		p.error = "Token expired"
-		done(p)
-		return
-	end
-	local sub = tostring(oauth.subscriptionType or "")
-	if sub ~= "" then
-		p.tier = sub:sub(1, 1):upper() .. sub:sub(2)
+	local token = ""
+	do
+		local raw = credPath ~= "" and noctalia.readFile(credPath) or nil
+		if raw then
+			local ok, data = pcall(noctalia.json.decode, raw)
+			if ok and type(data) == "table" and type(data.claudeAiOauth) == "table" then
+				local oauth = data.claudeAiOauth
+				local t = tostring(oauth.accessToken or "")
+				local expires = tonumber(oauth.expiresAt) or 0
+				if t ~= "" and not (expires > 0 and expires <= os.time() * 1000) then
+					token = t
+					local sub = tostring(oauth.subscriptionType or "")
+					if sub ~= "" then
+						p.tier = sub:sub(1, 1):upper() .. sub:sub(2)
+					end
+				elseif expires > 0 and expires <= os.time() * 1000 then
+					p.error = "Token expired"
+				else
+					p.error = "Waiting for auth"
+				end
+			else
+				p.error = "Waiting for auth"
+			end
+		else
+			p.error = "Waiting for auth"
+		end
 	end
 	-- Local stats already give token counts; OAuth gives rate limits.
 	if p.todayTokens > 0 then
 		p.ready = true
 		p.error = ""
 	end
-	probeOAuth(p, token, done)
+
+	-- Merge `tc-probe claude` transcript history (Codex-style token
+	-- chart): today totals + per-model rows + 15-day recentDays.
+	-- Falls back to stats-cache message counts when transcripts are
+	-- missing so the chart still renders.
+	local function mergeHistory(data)
+		if type(data) ~= "table" then
+			return
+		end
+		local lastUsed = math.floor(tonumber(data.lastUsedAt) or 0)
+		if lastUsed > historyLastUsed then
+			p.lastUsedAt = lastUsed
+		end
+		if type(data.recentDays) == "table" and #data.recentDays > 0 then
+			local rows = {}
+			local tokenSum = 0
+			for _, d in ipairs(data.recentDays) do
+				if type(d) == "table" then
+					local toks = math.floor(tonumber(d.tokens) or 0)
+					local msgs = math.floor(tonumber(d.messageCount or d.messages) or 0)
+					tokenSum += toks
+					table.insert(rows, {
+						date = tostring(d.date or ""),
+						tokens = toks,
+						messages = msgs,
+					})
+				end
+			end
+			if tokenSum > 0 then
+				p.recentDays = rows
+			end
+		end
+		local today = math.floor(tonumber(data.todayTotalTokens) or 0)
+		if today > 0 then
+			p.todayTokens = today
+			if type(data.todayTokensByModel) == "table" then
+				local rows = {}
+				for model, toks in pairs(data.todayTokensByModel) do
+					table.insert(rows, { model = tostring(model), tokens = math.floor(tonumber(toks) or 0) })
+				end
+				table.sort(rows, function(a, b)
+					return a.tokens > b.tokens
+				end)
+				while #rows > 5 do
+					table.remove(rows)
+				end
+				p.topModels = rows
+			end
+			p.ready = true
+			if p.error == "Waiting for data" or p.error == "Waiting for auth" then
+				p.error = ""
+			end
+		end
+	end
+
+	local historyDone = false
+	local oauthDone = false
+	local finished = false
+	local function maybeFinish()
+		if historyDone and oauthDone and not finished then
+			finished = true
+			done(p)
+		end
+	end
+	runner.runClaudeHistory(function(data)
+		local okM, errM = pcall(mergeHistory, data)
+		if not okM then
+			noctalia.log("token-cafe: claude history merge failed: " .. tostring(errM))
+		end
+		historyDone = true
+		maybeFinish()
+	end)
+	if token == "" then
+		-- No OAuth token: still show local history chart.
+		oauthDone = true
+		maybeFinish()
+	else
+		probeOAuth(p, token, function()
+			oauthDone = true
+			maybeFinish()
+		end)
+	end
 end
 
 return M

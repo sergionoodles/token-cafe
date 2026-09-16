@@ -121,4 +121,33 @@ function M.runAntigravityProbe(done)
 	end
 end
 
+-- Run `tc-probe claude` (local transcript token history, no external CLI)
+-- and return the raw decoded JSON (or nil on failure). The Claude Luau
+-- module merges this into its OAuth quota card.
+function M.runClaudeHistory(done)
+	local bin = M.probeBin()
+	if not noctalia.fileExists(bin) then
+		done(nil)
+		return
+	end
+	local dir = trim(cfg("claude_projects_path", "~/.claude/projects"))
+	if dir == "" then
+		dir = "~/.claude/projects"
+	end
+	local args = { bin, "claude", "--projects-dir", dir, "--timeout", tostring(M.probeTimeoutSec()) }
+	local accepted = noctalia.runAsync(args, function(result)
+		local ok, data = pcall(function()
+			return noctalia.json.decode((result and result.stdout) or "")
+		end)
+		if not ok or type(data) ~= "table" then
+			done(nil)
+			return
+		end
+		done(data)
+	end, M.probeTimeoutSec() * 1000 + 5000)
+	if not accepted then
+		done(nil)
+	end
+end
+
 return M

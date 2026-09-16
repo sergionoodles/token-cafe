@@ -17,14 +17,6 @@ local function limit()
 	return math.max(0, math.min(4, math.floor(n)))
 end
 
-local function sortMode()
-	local m = tostring(noctalia.getConfig("bar_sort_mode") or "recent")
-	if m == "name" or m == "usage" then
-		return m
-	end
-	return "recent"
-end
-
 local function statusColor(p)
 	if p.ready ~= true then
 		return "on_surface_variant"
@@ -33,41 +25,13 @@ local function statusColor(p)
 end
 
 local function render()
+	-- Snapshot order == Overview order (service sorts by custom order).
 	local providers = (type(snapshot) == "table" and snapshot.providers) or {}
 	local ready = {}
 	for _, p in ipairs(providers) do
 		if type(p) == "table" and p.ready == true and (tonumber(p.primaryPct) or -1) >= 0 then
 			table.insert(ready, p)
 		end
-	end
-	local mode = sortMode()
-	if mode == "name" then
-		table.sort(ready, function(a, b)
-			return tostring(a.name or a.id or ""):lower() < tostring(b.name or b.id or ""):lower()
-		end)
-	elseif mode == "recent" then
-		table.sort(ready, function(a, b)
-			local la = math.floor(tonumber(a.lastUsedAt) or 0)
-			local lb = math.floor(tonumber(b.lastUsedAt) or 0)
-			if la ~= lb then
-				return la > lb
-			end
-			local ta = (tonumber(a.todayTokens) or 0) + (tonumber(a.todayPrompts) or 0)
-			local tb = (tonumber(b.todayTokens) or 0) + (tonumber(b.todayPrompts) or 0)
-			if ta ~= tb then
-				return ta > tb
-			end
-			local pa = tonumber(a.primaryPct) or -1
-			local pb = tonumber(b.primaryPct) or -1
-			if pa ~= pb then
-				return pa > pb
-			end
-			return tostring(a.name or a.id or ""):lower() < tostring(b.name or b.id or ""):lower()
-		end)
-	else
-		table.sort(ready, function(a, b)
-			return (tonumber(a.primaryPct) or -1) > (tonumber(b.primaryPct) or -1)
-		end)
 	end
 
 	local children = {

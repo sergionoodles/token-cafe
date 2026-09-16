@@ -216,6 +216,9 @@ fn probe_inner(cli_bin: &str, deadline: Instant) -> Result<Value> {
 }
 
 /// Legacy v1 tables (`message`/`session`, assistant selected by `$.role`).
+/// `recentDays` covers the same 15-day window as the panel chart
+/// (HISTORY_DAYS) and Codex `dailyUsageBuckets` so all providers render
+/// a full chart instead of a week plus empty bars.
 fn probe_v1(conn: &Connection, mut out: Value) -> Result<Value> {
     let (start_ms, end_ms) = today_window_ms();
     let row = one_row(
@@ -302,7 +305,7 @@ fn probe_v1(conn: &Connection, mut out: Value) -> Result<Value> {
     }
     out["todayTokensByModel"] = Value::from(today_models);
 
-    let six_ago = start_ms - 6 * 86400 * 1000;
+    let fourteen_ago = start_ms - 14 * 86400 * 1000;
     let mut stmt = conn
         .prepare(&format!(
             "SELECT date(time_created / 1000, 'unixepoch', 'localtime') date, COUNT(*) requests, COALESCE(SUM({TOKEN_TOTAL}), 0) tokens FROM message WHERE {ROLE} AND time_created >= ?1 GROUP BY date"
@@ -310,7 +313,7 @@ fn probe_v1(conn: &Connection, mut out: Value) -> Result<Value> {
         .map_err(|e| ProbeError(e.to_string()))?;
     let mut daily: BTreeMap<String, (i64, i64)> = BTreeMap::new();
     let rows = stmt
-        .query_map([six_ago], |r| {
+        .query_map([fourteen_ago], |r| {
             Ok((
                 r.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 r.get::<_, i64>(1)?,
@@ -323,8 +326,8 @@ fn probe_v1(conn: &Connection, mut out: Value) -> Result<Value> {
         daily.insert(date, (reqs, toks));
     }
     let mut recent = Vec::new();
-    for offset in 0..7 {
-        let date = local_day_string(offset - 6);
+    for offset in 0..15 {
+        let date = local_day_string(offset - 14);
         let (reqs, toks) = daily.get(&date).copied().unwrap_or((0, 0));
         recent.push(json!({"date": date, "messageCount": reqs, "tokens": toks}));
     }
@@ -432,7 +435,7 @@ fn probe_v2(conn: &Connection, mut out: Value) -> Result<Value> {
     }
     out["todayTokensByModel"] = Value::from(today_models);
 
-    let six_ago = start_ms - 6 * 86400 * 1000;
+    let fourteen_ago = start_ms - 14 * 86400 * 1000;
     let mut stmt = conn
         .prepare(&format!(
             "SELECT date(time_created / 1000, 'unixepoch', 'localtime') date, COUNT(*) requests, COALESCE(SUM({TOKEN_TOTAL}), 0) tokens FROM session_message WHERE {V2_ROLE} AND time_created >= ?1 GROUP BY date"
@@ -440,7 +443,7 @@ fn probe_v2(conn: &Connection, mut out: Value) -> Result<Value> {
         .map_err(|e| ProbeError(e.to_string()))?;
     let mut daily: BTreeMap<String, (i64, i64)> = BTreeMap::new();
     let rows = stmt
-        .query_map([six_ago], |r| {
+        .query_map([fourteen_ago], |r| {
             Ok((
                 r.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 r.get::<_, i64>(1)?,
@@ -453,8 +456,8 @@ fn probe_v2(conn: &Connection, mut out: Value) -> Result<Value> {
         daily.insert(date, (reqs, toks));
     }
     let mut recent = Vec::new();
-    for offset in 0..7 {
-        let date = local_day_string(offset - 6);
+    for offset in 0..15 {
+        let date = local_day_string(offset - 14);
         let (reqs, toks) = daily.get(&date).copied().unwrap_or((0, 0));
         recent.push(json!({"date": date, "messageCount": reqs, "tokens": toks}));
     }

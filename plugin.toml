@@ -79,6 +79,15 @@ default = "~/.claude/.credentials.json"
 advanced = true
 visible_when = { key = "claude_enabled", values = ["true"] }
 
+[[setting]]
+key = "claude_projects_path"
+type = "string"
+label_key = "settings.claude_projects_path.label"
+description_key = "settings.claude_projects_path.description"
+default = "~/.claude/projects"
+advanced = true
+visible_when = { key = "claude_enabled", values = ["true"] }
+
 # ── Google Antigravity ─────────────────────────────────────────────────────
 [[setting]]
 key = "antigravity_enabled"
@@ -183,18 +192,6 @@ entry = "widget.luau"
   default = 2
   min = 0
   max = 4
-
-  [[widget.setting]]
-  key = "bar_sort_mode"
-  type = "select"
-  label_key = "settings.bar_sort_mode.label"
-  description_key = "settings.bar_sort_mode.description"
-  default = "recent"
-  options = [
-    { value = "usage", label_key = "settings.bar_sort_mode.options.usage" },
-    { value = "name", label_key = "settings.bar_sort_mode.options.name" },
-    { value = "recent", label_key = "settings.bar_sort_mode.options.recent" },
-  ]
 
 [[panel]]
 id = "panel"

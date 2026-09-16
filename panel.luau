@@ -10,6 +10,7 @@ local schema = require("./lib/schema.luau")
 
 local snapshot = noctalia.state.get(STATE_KEY) or { providers = {}, refreshing = false, updatedAt = 0 }
 local tab = "dashboard" -- "dashboard" | provider id
+local hoveredCard = nil
 local feedback = ""
 local feedbackError = false
 local dirty = true
@@ -26,6 +27,36 @@ local render
 local function send(action)
 	requestCounter += 1
 	noctalia.state.set(COMMAND_KEY, { action = action, requestId = "panel-" .. tostring(requestCounter) })
+end
+
+local function sendOrder(newOrder)
+	requestCounter += 1
+	noctalia.state.set(COMMAND_KEY, { action = "reorder", order = newOrder, requestId = "panel-" .. tostring(requestCounter) })
+end
+
+local function moveProvider(id, delta)
+	local ids = {}
+	for _, p in ipairs(snapshot.providers or {}) do
+		if type(p) == "table" and p.id ~= nil then
+			table.insert(ids, p.id)
+		end
+	end
+	local idx = nil
+	for i, pid in ipairs(ids) do
+		if pid == id then
+			idx = i
+			break
+		end
+	end
+	if not idx then
+		return
+	end
+	local j = idx + delta
+	if j < 1 or j > #ids then
+		return
+	end
+	ids[idx], ids[j] = ids[j], ids[idx]
+	sendOrder(ids)
 end
 
 local function statusColor(p)
@@ -220,8 +251,9 @@ local function quotaRow(label, pct, resetIso)
 	})
 end
 
-local function providerCard(p)
+local function providerCard(p, index, total)
 	local rows = quotaRows(p)
+	local cardId = tostring(p.id)
 	local body = {
 		ui.row({ gap = 8, align = "center" }, {
 			providerIcon(p, 18),
@@ -230,12 +262,25 @@ local function providerCard(p)
 				ui.label({ text = statusText(p), fontSize = 11, color = statusColor(p), maxLines = 1 }),
 			}),
 			ui.button({
-				text = noctalia.tr("panel.open"),
+				key = "up-" .. cardId,
+				glyph = "chevron-up",
 				variant = "ghost",
 				controlSize = "sm",
+				enabled = (index or 1) > 1,
+				tooltip = noctalia.tr("panel.move_up"),
 				onClick = function()
-					tab = p.id
-					render()
+					moveProvider(p.id, -1)
+				end,
+			}),
+			ui.button({
+				key = "down-" .. cardId,
+				glyph = "chevron-down",
+				variant = "ghost",
+				controlSize = "sm",
+				enabled = (index or 1) < (total or 1),
+				tooltip = noctalia.tr("panel.move_down"),
+				onClick = function()
+					moveProvider(p.id, 1)
 				end,
 			}),
 		}),
@@ -251,13 +296,31 @@ local function providerCard(p)
 			maxLines = 1,
 		}))
 	end
+	local isHovered = hoveredCard == cardId
 	return ui.column({
-		key = "card-" .. tostring(p.id),
+		key = "card-" .. cardId,
 		gap = 6,
 		padding = 12,
 		fill = "surface_variant/0.45",
 		radius = 10,
+		border = isHovered and "primary/0.55" or "surface_variant/0.45",
+		borderWidth = 1,
 		align = "stretch",
+		onClick = function()
+			tab = p.id
+			render()
+		end,
+		onHover = function(state)
+			if state == "true" then
+				if hoveredCard ~= cardId then
+					hoveredCard = cardId
+					render()
+				end
+			elseif hoveredCard == cardId then
+				hoveredCard = nil
+				render()
+			end
+		end,
 	}, body)
 end
 
@@ -381,8 +444,8 @@ render = function()
 			})
 		else
 			local cards = {}
-			for _, p in ipairs(providers) do
-				table.insert(cards, providerCard(p))
+			for i, p in ipairs(providers) do
+				table.insert(cards, providerCard(p, i, #providers))
 			end
 			content = ui.column({ gap = 8, align = "stretch" }, cards)
 		end
@@ -455,6 +518,9 @@ noctalia.state.watch(STATE_KEY, function(value)
 	snapshot = value
 	if tab ~= "dashboard" and not findProvider(tab) then
 		tab = "dashboard"
+	end
+	if hoveredCard ~= nil and not findProvider(hoveredCard) then
+		hoveredCard = nil
 	end
 	dirty = true
 end)
