@@ -773,14 +773,24 @@ fn apply_pools(mut out: Value, pools: &[Pool], tier: &str) -> Value {
 }
 
 pub fn probe(state_db: &str, project_id: &str, deadline: Instant) -> Value {
-    match probe_inner(state_db, project_id, deadline) {
+    let mut v = match probe_inner(state_db, project_id, deadline) {
         Ok(v) => v,
         Err(e) => {
             let mut v = base_result();
             v["usageStatusText"] = Value::from(clean_error(e.0));
             v
         }
+    };
+    // Recency for "most recently used" bar ordering: state DB mtime tracks
+    // last IDE activity. Only fill when the probe did not report better.
+    if v.get("lastUsedAt").and_then(|n| n.as_i64()).unwrap_or(0) <= 0 {
+        let resolved = resolve_state_db(state_db);
+        let m = crate::util::file_mtime_secs(std::path::Path::new(&resolved));
+        if m > 0 {
+            v["lastUsedAt"] = serde_json::json!(m);
+        }
     }
+    v
 }
 
 fn probe_inner(state_db: &str, project_id: &str, deadline: Instant) -> Result<Value> {

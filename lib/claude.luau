@@ -126,7 +126,8 @@ local function parseHistory(p)
 end
 
 local function normPct(v)
-	local n = tonumber(tostring(v or ""):gsub("%%", ""))
+	local cleaned = tostring(v or ""):gsub("%%", "")
+	local n = tonumber(cleaned)
 	if n == nil or n < 0 then
 		return -1
 	end
@@ -153,38 +154,52 @@ local function probeOAuth(p, token, done)
 			"Accept: application/json",
 		},
 	}, function(resp)
-		if resp and resp.ok and (resp.status or 0) >= 200 and (resp.status or 0) < 300 then
-			local dec, data = pcall(noctalia.json.decode, resp.body or "")
-			if dec and type(data) == "table" then
-				local weekly = data.seven_day_oauth_apps or data.seven_day
-				local five = data.five_hour
-				local wPct = -1
-				local sPct = -1
-				local wReset = ""
-				local sReset = ""
-				if type(weekly) == "table" then
-					wPct = normPct(weekly.utilization)
-					wReset = tostring(weekly.resets_at or "")
-				end
-				if type(five) == "table" then
-					sPct = normPct(five.utilization)
-					sReset = tostring(five.resets_at or "")
-				end
-				if wPct >= 0 or sPct >= 0 then
-					p.primaryLabel = "Weekly (7-day)"
-					p.primaryPct = wPct >= 0 and wPct or sPct
-					p.primaryReset = wReset ~= "" and wReset or sReset
-					if sPct >= 0 then
-						p.secondaryLabel = "Session (5-hour)"
-						p.secondaryPct = sPct
-						p.secondaryReset = sReset
+		local okParse, parseErr = pcall(function()
+			if resp and resp.ok and (resp.status or 0) >= 200 and (resp.status or 0) < 300 then
+				local dec, data = pcall(noctalia.json.decode, resp.body or "")
+				if dec and type(data) == "table" then
+					local weekly = data.seven_day_oauth_apps or data.seven_day
+					local five = data.five_hour
+					local wPct = -1
+					local sPct = -1
+					local wReset = ""
+					local sReset = ""
+					if type(weekly) == "table" then
+						wPct = normPct(weekly.utilization)
+						wReset = tostring(weekly.resets_at or "")
 					end
-					p.ready = true
-					p.error = ""
+					if type(five) == "table" then
+						sPct = normPct(five.utilization)
+						sReset = tostring(five.resets_at or "")
+					end
+					if wPct >= 0 or sPct >= 0 then
+						if sPct >= 0 then
+							p.primaryLabel = "5-hour"
+							p.primaryPct = sPct
+							p.primaryReset = sReset
+							if wPct >= 0 then
+								p.secondaryLabel = "Weekly (7-day)"
+								p.secondaryPct = wPct
+								p.secondaryReset = wReset
+							end
+						else
+							p.primaryLabel = "Weekly (7-day)"
+							p.primaryPct = wPct
+							p.primaryReset = wReset
+						end
+						p.ready = true
+						p.error = ""
+					end
 				end
+			elseif resp and (resp.status == 401 or resp.status == 403) then
+				p.error = "Token expired"
 			end
-		elseif resp and (resp.status == 401 or resp.status == 403) then
-			p.error = "Token expired"
+		end)
+		if not okParse then
+			noctalia.log("token-cafe: claude usage parse failed: " .. tostring(parseErr))
+			if p.ready ~= true then
+				p.error = "Usage parse failed"
+			end
 		end
 		finish()
 	end)

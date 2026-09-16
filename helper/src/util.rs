@@ -247,6 +247,74 @@ pub fn run_command(argv: &[String], timeout: Duration) -> Result<String> {
     }
 }
 
+/// HOME directory, empty when unset.
+pub fn home_dir() -> String {
+    std::env::var("HOME").unwrap_or_default()
+}
+
+/// Expand a leading `~/` using HOME.
+pub fn expand_home(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        let home = home_dir();
+        if home.is_empty() {
+            return path.to_string();
+        }
+        return format!("{home}/{rest}");
+    }
+    path.to_string()
+}
+
+/// File mtime as epoch seconds, 0 on any error.
+pub fn file_mtime_secs(path: &std::path::Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Max mtime (epoch secs) under `dir`, recursive, bounded by `max_files`.
+/// Returns 0 when the dir is missing/unreadable. Follows no symlinks
+/// beyond one level (symlinks to files count via metadata, dirs are
+/// not descended into when symlinked to avoid cycles).
+pub fn dir_max_mtime(dir: &str, max_files: usize) -> i64 {
+    let root = expand_home(dir);
+    let mut best: i64 = 0;
+    let mut stack = vec![std::path::PathBuf::from(&root)];
+    let mut seen: usize = 0;
+    while let Some(path) = stack.pop() {
+        let entries = match std::fs::read_dir(&path) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            if seen >= max_files {
+                return best;
+            }
+            seen += 1;
+            let p = entry.path();
+            let ft = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if ft.is_dir() {
+                // Do not descend into symlinked dirs (cycle safety).
+                if p.is_symlink() {
+                    continue;
+                }
+                stack.push(p);
+            } else if ft.is_file() || ft.is_symlink() {
+                let m = file_mtime_secs(&p);
+                if m > best {
+                    best = m;
+                }
+            }
+        }
+    }
+    best
+}
+
 /// f64-or-default, mirroring the old `number()` helper (NaN -> default).
 pub fn num(v: Option<&Value>, default: f64) -> f64 {
     match v {
@@ -422,6 +490,31 @@ mod tests {
         assert_eq!(
             iso_timestamp(Some(&json!("2025-12-31T19:00:00-0500"))),
             "2026-01-01T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn dir_max_mtime_missing_is_zero() {
+        assert_eq!(dir_max_mtime("~/.token-cafe-definitely-missing-dir", 100), 0);
+    }
+
+    #[test]
+    fn dir_max_mtime_finds_newest_file() {
+        let base = std::env::temp_dir().join(format!("tc-probe-test-{}", std::process::id()));
+        let sub = base.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(base.join("a.txt"), "a").unwrap();
+        std::fs::write(sub.join("b.txt"), "b").unwrap();
+        let got = dir_max_mtime(base.to_str().unwrap(), 100);
+        assert!(got > 0);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn file_mtime_missing_is_zero() {
+        assert_eq!(
+            file_mtime_secs(std::path::Path::new("/definitely/missing/tc-probe-test-file")),
+            0
         );
     }
 }

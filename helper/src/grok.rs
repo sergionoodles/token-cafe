@@ -6,7 +6,7 @@
 //! name first and fall back to the legacy one so both work.
 
 use crate::rpc::JsonLineProcess;
-use crate::util::{clean_error, executable_command, iso_timestamp, num, ProbeError, Result};
+use crate::util::{clean_error, dir_max_mtime, executable_command, expand_home, file_mtime_secs, iso_timestamp, num, ProbeError, Result};
 use serde_json::{json, Value};
 use std::time::Instant;
 
@@ -30,14 +30,38 @@ fn unwrap_result(mut v: Value) -> Value {
 }
 
 pub fn probe(cli_bin: &str, deadline: Instant) -> Value {
-    match probe_inner(cli_bin, deadline) {
+    let mut v = match probe_inner(cli_bin, deadline) {
         Ok(v) => v,
         Err(e) => {
             let mut v = base();
             v["usageStatusText"] = Value::from(clean_error(e.0));
             v
         }
+    };
+    // Recency signal for "most recently used" bar ordering. The billing
+    // API carries no activity timestamps, so derive it from local session
+    // files at each scheduled refresh.
+    v["lastUsedAt"] = Value::from(last_activity());
+    v
+}
+
+/// Most recent Grok activity as epoch seconds: newest mtime under
+/// ~/.grok/sessions plus the unified log / search index. 0 when unknown.
+fn last_activity() -> i64 {
+    let mut best = dir_max_mtime("~/.grok/sessions", 5000);
+    for cand in ["~/.grok/logs/unified.jsonl", "~/.grok/active_sessions.json"] {
+        let p = std::path::PathBuf::from(expand_home(cand));
+        let m = file_mtime_secs(&p);
+        if m > best {
+            best = m;
+        }
     }
+    // Session search index lives one level deeper per workspace dir.
+    let idx = dir_max_mtime("~/.grok/sessions", 5000);
+    if idx > best {
+        best = idx;
+    }
+    best
 }
 
 fn base() -> Value {

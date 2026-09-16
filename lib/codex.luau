@@ -57,7 +57,10 @@ function M.refresh(done)
 		local prompts, sessions, lastUsed = countHistory()
 		p.todayPrompts = prompts
 		p.todaySessions = sessions
-		p.lastUsedAt = lastUsed
+		-- The Rust probe reports max mtime of ~/.codex/sessions rollout
+		-- files; history.jsonl goes stale on newer CLIs. Take max so the
+		-- "most recently used" bar order tracks actual last usage.
+		p.lastUsedAt = math.max(math.floor(tonumber(p.lastUsedAt) or 0), lastUsed)
 		local det = {}
 		-- Keep the plan out of the Codex detail view.
 		p.tier = ""

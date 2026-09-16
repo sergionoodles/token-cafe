@@ -18,11 +18,11 @@ local function limit()
 end
 
 local function sortMode()
-	local m = tostring(noctalia.getConfig("bar_sort_mode") or "usage")
-	if m == "name" or m == "recent" then
+	local m = tostring(noctalia.getConfig("bar_sort_mode") or "recent")
+	if m == "name" or m == "usage" then
 		return m
 	end
-	return "usage"
+	return "recent"
 end
 
 local function statusColor(p)

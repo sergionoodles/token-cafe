@@ -75,14 +75,23 @@ fn reset_forecast(timeout: Duration) -> i64 {
 }
 
 pub fn probe(cli_bin: &str, deadline: Instant) -> Value {
-    match probe_inner(cli_bin, deadline) {
+    let mut v = match probe_inner(cli_bin, deadline) {
         Ok(v) => v,
         Err(e) => {
             let mut v = base();
             v["usageStatusText"] = Value::from(clean_error(e.0));
             v
         }
+    };
+    // Recency signal for "most recently used" bar ordering. history.jsonl
+    // goes stale on newer CLIs, so the rollout session files are the
+    // authoritative local signal; the Luau side takes max() with its own
+    // history.jsonl parse.
+    let m = crate::util::dir_max_mtime("~/.codex/sessions", 5000);
+    if m > 0 {
+        v["lastUsedAt"] = serde_json::json!(m);
     }
+    v
 }
 
 fn base() -> Value {

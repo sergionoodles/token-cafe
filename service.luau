@@ -31,6 +31,30 @@ local snapshot = {
 local generation = 0
 local pending = false
 
+-- Active refresh state, visible to update() so one hung provider cannot
+-- block the whole snapshot forever (noctalia.http has no timeout).
+local activeMods = {}
+local refreshResults = {}
+local refreshRemaining = 0
+local refreshGen = 0
+local refreshDeadlineMs = 0
+
+local function nowMs()
+	local ok, v = pcall(function()
+		return noctalia.nowMs()
+	end)
+	if ok and type(v) == "number" then
+		return v
+	end
+	return os.time() * 1000
+end
+
+local function probeTimeoutMs()
+	local s = tonumber(noctalia.getConfig("probe_timeout_sec")) or 25
+	s = math.max(5, math.min(60, math.floor(s)))
+	return s * 1000 + 5000
+end
+
 -- Last-seen activity per provider for "most recently used" ordering.
 -- Tracks counter increases across refreshes so API-only providers
 -- (no local history timestamps) still get a recency signal.
@@ -62,6 +86,84 @@ local function seedBlanks()
 		return (order[a.id] or 99) < (order[b.id] or 99)
 	end)
 	snapshot.providers = providers
+end
+
+local function stampRecency(p)
+	if type(p) ~= "table" then
+		return
+	end
+	local now = os.time()
+	local tokens = math.floor(tonumber(p.todayTokens) or 0)
+	local prompts = math.floor(tonumber(p.todayPrompts) or 0)
+	local sessions = math.floor(tonumber(p.todaySessions) or 0)
+	local probeLast = math.floor(tonumber(p.lastUsedAt) or 0)
+	local prev = lastActivity[p.id]
+	if prev then
+		if tokens > (prev.tokens or 0) or prompts > (prev.prompts or 0) or sessions > (prev.sessions or 0) then
+			p.lastUsedAt = now
+		elseif (prev.lastUsedAt or 0) > probeLast then
+			p.lastUsedAt = prev.lastUsedAt
+		else
+			p.lastUsedAt = probeLast
+		end
+	else
+		if probeLast > 0 then
+			p.lastUsedAt = probeLast
+		elseif tokens > 0 or prompts > 0 or sessions > 0 then
+			p.lastUsedAt = now
+		else
+			p.lastUsedAt = 0
+		end
+	end
+	lastActivity[p.id] = {
+		tokens = tokens,
+		prompts = prompts,
+		sessions = sessions,
+		lastUsedAt = math.floor(tonumber(p.lastUsedAt) or 0),
+	}
+end
+
+-- Publish whatever has arrived; providers that never called back get a
+-- timeout card so one hung request cannot hide every other provider.
+local function finishRefresh()
+	if not pending or refreshGen ~= generation then
+		return
+	end
+	local seen = {}
+	for _, p in ipairs(refreshResults) do
+		if type(p) == "table" and p.id ~= nil then
+			seen[p.id] = true
+		end
+	end
+	for _, mod in ipairs(activeMods) do
+		if not seen[mod.id] then
+			local p = schema.blank(mod.id)
+			p.error = "Request timed out"
+			table.insert(refreshResults, p)
+		end
+	end
+	local order = {}
+	for i, id in ipairs(schema.ORDER) do
+		order[id] = i
+	end
+	local providers = {}
+	for _, p in ipairs(refreshResults) do
+		if type(p) == "table" then
+			stampRecency(p)
+			table.insert(providers, p)
+		end
+	end
+	table.sort(providers, function(a, b)
+		return (order[a.id] or 99) < (order[b.id] or 99)
+	end)
+	snapshot.providers = providers
+	snapshot.refreshing = false
+	snapshot.updatedAt = os.time()
+	snapshot.revision += 1
+	publish()
+	pending = false
+	refreshRemaining = 0
+	noctalia.setUpdateInterval(refreshIntervalMs())
 end
 
 local function refreshAll()
@@ -124,73 +226,24 @@ local function refreshAll()
 		return
 	end
 
-	local remaining = #active
-	local results = {}
-
-	local function stampRecency(p)
-		if type(p) ~= "table" then
-			return
-		end
-		local now = os.time()
-		local tokens = math.floor(tonumber(p.todayTokens) or 0)
-		local prompts = math.floor(tonumber(p.todayPrompts) or 0)
-		local sessions = math.floor(tonumber(p.todaySessions) or 0)
-		local probeLast = math.floor(tonumber(p.lastUsedAt) or 0)
-		local prev = lastActivity[p.id]
-		if prev then
-			if tokens > (prev.tokens or 0) or prompts > (prev.prompts or 0) or sessions > (prev.sessions or 0) then
-				p.lastUsedAt = now
-			elseif (prev.lastUsedAt or 0) > probeLast then
-				p.lastUsedAt = prev.lastUsedAt
-			else
-				p.lastUsedAt = probeLast
-			end
-		else
-			if probeLast > 0 then
-				p.lastUsedAt = probeLast
-			elseif tokens > 0 or prompts > 0 or sessions > 0 then
-				p.lastUsedAt = now
-			else
-				p.lastUsedAt = 0
-			end
-		end
-		lastActivity[p.id] = {
-			tokens = tokens,
-			prompts = prompts,
-			sessions = sessions,
-			lastUsedAt = math.floor(tonumber(p.lastUsedAt) or 0),
-		}
-	end
+	refreshGen = gen
+	activeMods = active
+	refreshResults = {}
+	refreshRemaining = #active
+	refreshDeadlineMs = nowMs() + probeTimeoutMs()
+	-- Fast tick while waiting so update() can enforce the deadline;
+	-- finishRefresh() restores the slow periodic interval.
+	noctalia.setUpdateInterval(1000)
 
 	local function finish()
-		if gen ~= generation then
+		if gen ~= generation or not pending then
 			return
 		end
-		remaining -= 1
-		if remaining > 0 then
+		refreshRemaining -= 1
+		if refreshRemaining > 0 then
 			return
 		end
-		local order = {}
-		for i, id in ipairs(schema.ORDER) do
-			order[id] = i
-		end
-		local providers = {}
-		for _, p in ipairs(results) do
-			if type(p) == "table" then
-				stampRecency(p)
-				table.insert(providers, p)
-			end
-		end
-		table.sort(providers, function(a, b)
-			return (order[a.id] or 99) < (order[b.id] or 99)
-		end)
-		snapshot.providers = providers
-		snapshot.refreshing = false
-		snapshot.updatedAt = os.time()
-		snapshot.revision += 1
-		publish()
-		pending = false
-		noctalia.setUpdateInterval(refreshIntervalMs())
+		finishRefresh()
 	end
 
 	for _, mod in ipairs(active) do
@@ -198,12 +251,16 @@ local function refreshAll()
 		local called = false
 		local ok, err = pcall(function()
 			thisMod.refresh(function(p)
-				if called or gen ~= generation then
+				if called or gen ~= generation or not pending then
 					return
 				end
 				called = true
 				if p ~= nil then
-					table.insert(results, p)
+					table.insert(refreshResults, p)
+				else
+					local blank = schema.blank(thisMod.id)
+					blank.error = "No data"
+					table.insert(refreshResults, blank)
 				end
 				finish()
 			end)
@@ -212,7 +269,7 @@ local function refreshAll()
 			noctalia.log("token-cafe: " .. tostring(mod.id) .. " refresh failed: " .. tostring(err))
 			local p = schema.blank(mod.id)
 			p.error = "Refresh failed"
-			table.insert(results, p)
+			table.insert(refreshResults, p)
 			finish()
 		end
 	end
@@ -253,5 +310,15 @@ noctalia.setUpdateInterval(refreshIntervalMs())
 refreshAll()
 
 function update()
+	if pending then
+		-- A provider that never calls back (thrown async callback,
+		-- stalled HTTP with no timeout) must not hold the snapshot
+		-- in "…" forever: publish what arrived plus timeout cards.
+		if refreshRemaining > 0 and nowMs() >= refreshDeadlineMs then
+			noctalia.log("token-cafe: refresh timed out, publishing partial results")
+			finishRefresh()
+		end
+		return
+	end
 	refreshAll()
 end

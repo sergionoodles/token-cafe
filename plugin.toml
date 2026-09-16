@@ -189,7 +189,7 @@ entry = "widget.luau"
   type = "select"
   label_key = "settings.bar_sort_mode.label"
   description_key = "settings.bar_sort_mode.description"
-  default = "usage"
+  default = "recent"
   options = [
     { value = "usage", label_key = "settings.bar_sort_mode.options.usage" },
     { value = "name", label_key = "settings.bar_sort_mode.options.name" },
