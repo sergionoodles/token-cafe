@@ -213,6 +213,202 @@ fn probe_inner(projects_dir: &str, deadline: Instant) -> Result<Value> {
     Ok(out)
 }
 
+/// OAuth token refresh for Claude Code (`tc-probe claude-auth`).
+///
+/// Overnight the access token in `~/.claude/.credentials.json` expires
+/// (roughly every 8h) and the usage endpoint starts returning 401, which
+/// surfaced as a morning "Token expired". Opening `claude` in a terminal
+/// fixes it because the CLI performs a standard OAuth refresh-token grant
+/// on startup — this probe does exactly that grant, with the CLI's public
+/// client id and scopes, and writes the renewed tokens back to the
+/// credentials file. The Luau side re-reads the file afterwards.
+///
+/// A `claude auth status` subprocess is deliberately NOT used: it reports
+/// cached login state without renewing the access token.
+const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+/// Public Claude Code OAuth client id (shipped in the CLI binary).
+const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+/// Default scopes requested by the CLI when none are stored.
+const DEFAULT_SCOPES: &[&str] = &[
+    "user:profile",
+    "user:inference",
+    "user:sessions:claude_code",
+    "user:mcp_servers",
+    "user:file_upload",
+];
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn auth_base() -> Value {
+    json!({
+        "provider": "claude-auth",
+        "ready": false,
+        "loggedIn": false,
+        "refreshed": false,
+        "subscriptionType": "",
+        "usageStatusText": "",
+    })
+}
+
+pub fn probe_auth(creds_path: &str, deadline: Instant) -> Value {
+    match probe_auth_inner(creds_path, deadline) {
+        Ok(v) => v,
+        Err(e) => {
+            let mut v = auth_base();
+            v["usageStatusText"] = Value::from(clean_error(e.0));
+            v
+        }
+    }
+}
+
+fn scope_string(oauth: &Value) -> String {
+    if let Some(arr) = oauth.get("scopes").and_then(|s| s.as_array()) {
+        let scopes: Vec<String> = arr
+            .iter()
+            .filter_map(|s| s.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect();
+        if !scopes.is_empty() {
+            return scopes.join(" ");
+        }
+    }
+    DEFAULT_SCOPES.join(" ")
+}
+
+fn probe_auth_inner(creds_path: &str, deadline: Instant) -> Result<Value> {
+    let path = if creds_path.trim().is_empty() {
+        expand_home("~/.claude/.credentials.json")
+    } else if creds_path.starts_with('~') {
+        expand_home(creds_path)
+    } else {
+        creds_path.to_string()
+    };
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|_| ProbeError(format!("Credentials not found: {path}")))?;
+    let mut data: Value =
+        serde_json::from_str(&raw).map_err(|e| ProbeError(format!("Credentials file is not valid JSON: {e}")))?;
+    let oauth = data
+        .get("claudeAiOauth")
+        .filter(|v| v.is_object())
+        .cloned()
+        .ok_or_else(|| ProbeError("Not logged in".to_string()))?;
+    let now = now_ms();
+    let access = oauth.get("accessToken").and_then(|v| v.as_str()).unwrap_or("");
+    let expires_at = oauth.get("expiresAt").and_then(|v| v.as_i64()).unwrap_or(0);
+    let sub = oauth.get("subscriptionType").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    // Token still valid: nothing to do, no network involved.
+    if !access.is_empty() && !(expires_at > 0 && expires_at <= now) {
+        let mut v = auth_base();
+        v["ready"] = Value::from(true);
+        v["loggedIn"] = Value::from(true);
+        v["subscriptionType"] = Value::from(sub);
+        return Ok(v);
+    }
+
+    let refresh = oauth.get("refreshToken").and_then(|v| v.as_str()).unwrap_or("");
+    if refresh.is_empty() {
+        let mut v = auth_base();
+        v["subscriptionType"] = Value::from(sub);
+        v["usageStatusText"] = Value::from("Not logged in");
+        return Ok(v);
+    }
+    let refresh_exp = oauth.get("refreshTokenExpiresAt").and_then(|v| v.as_i64()).unwrap_or(0);
+    if refresh_exp > 0 && refresh_exp <= now {
+        let mut v = auth_base();
+        v["subscriptionType"] = Value::from(sub);
+        v["usageStatusText"] = Value::from("Refresh token expired — log in again");
+        return Ok(v);
+    }
+
+    let body = serde_json::json!({
+        "grant_type": "refresh_token",
+        "refresh_token": refresh,
+        "client_id": CLIENT_ID,
+        "scope": scope_string(&oauth),
+    });
+    let timeout = remaining(deadline)?.min(std::time::Duration::from_secs(30));
+    let client = reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .user_agent("TokenCafe")
+        .build()
+        .map_err(|e| ProbeError(format!("Refresh request failed: {e}")))?;
+    let resp = client
+        .post(TOKEN_URL)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .map_err(|e| ProbeError(format!("Refresh request failed: {e}")))?;
+    let status = resp.status().as_u16();
+    if !(200..300).contains(&status) {
+        let detail: String = resp.text().unwrap_or_default().chars().take(200).collect();
+        // The refresh token itself is dead: re-login is required, retrying
+        // the same grant cannot succeed.
+        if status == 400 || status == 401 {
+            let mut v = auth_base();
+            v["subscriptionType"] = Value::from(sub);
+            v["usageStatusText"] = Value::from("Re-login required");
+            if detail.contains("invalid_grant") {
+                v["usageStatusText"] = Value::from("Re-login required");
+            }
+            return Ok(v);
+        }
+        return Err(ProbeError(format!("Token refresh failed (HTTP {status}): {detail}")));
+    }
+    let token: Value = resp
+        .json()
+        .map_err(|e| ProbeError(format!("Invalid refresh response: {e}")))?;
+    let new_access = token.get("access_token").and_then(|v| v.as_str()).unwrap_or("");
+    if new_access.is_empty() {
+        return Err(ProbeError("Refresh response missing access token".to_string()));
+    }
+    let expires_in = token
+        .get("expires_in")
+        .and_then(|v| v.as_i64())
+        .or_else(|| token.get("expires_in").and_then(|v| v.as_f64()).map(|f| f as i64))
+        .unwrap_or(0);
+    if expires_in <= 0 {
+        return Err(ProbeError("Refresh response missing expires_in".to_string()));
+    }
+    let new_refresh = token.get("refresh_token").and_then(|v| v.as_str()).unwrap_or(refresh);
+    let oauth_mut = data.get_mut("claudeAiOauth").ok_or_else(|| ProbeError("Not logged in".to_string()))?;
+    oauth_mut["accessToken"] = Value::from(new_access);
+    oauth_mut["refreshToken"] = Value::from(new_refresh);
+    oauth_mut["expiresAt"] = json!(now + expires_in * 1000);
+    // `refresh_token_expires_in` is seconds from now when the server rotates
+    // the refresh token; absent means the old expiry still holds.
+    if let Some(rtei) = token
+        .get("refresh_token_expires_in")
+        .and_then(|v| v.as_i64())
+        .or_else(|| token.get("refresh_token_expires_in").and_then(|v| v.as_f64()).map(|f| f as i64))
+    {
+        if rtei > 0 {
+            oauth_mut["refreshTokenExpiresAt"] = json!(now + rtei * 1000);
+        }
+    }
+    if let Some(scope) = token.get("scope").and_then(|v| v.as_str()) {
+        let scopes: Vec<Value> = scope.split_whitespace().map(Value::from).collect();
+        if !scopes.is_empty() {
+            oauth_mut["scopes"] = Value::from(scopes);
+        }
+    }
+    std::fs::write(&path, serde_json::to_string(&data).unwrap_or(raw))
+        .map_err(|e| ProbeError(format!("Could not save refreshed credentials: {e}")))?;
+
+    let mut v = auth_base();
+    v["ready"] = Value::from(true);
+    v["loggedIn"] = Value::from(true);
+    v["refreshed"] = Value::from(true);
+    v["subscriptionType"] = Value::from(sub);
+    Ok(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +466,84 @@ mod tests {
         assert_eq!(recent.len(), HISTORY_DAYS as usize);
         assert_eq!(recent.last().unwrap()["tokens"], json!(100));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn auth_reports_valid_token_without_network() {
+        let dir = std::env::temp_dir().join(format!("tc-claude-auth-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("credentials.json");
+        let future = now_ms() + 8 * 3600 * 1000;
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"claudeAiOauth\":{{\"accessToken\":\"at\",\"refreshToken\":\"rt\",\"expiresAt\":{future},\"subscriptionType\":\"pro\"}}}}"
+            ),
+        )
+        .unwrap();
+        let d = Instant::now() + std::time::Duration::from_secs(5);
+        let out = probe_auth(path.to_str().unwrap(), d);
+        assert_eq!(out["provider"], json!("claude-auth"));
+        assert_eq!(out["ready"], json!(true));
+        assert_eq!(out["loggedIn"], json!(true));
+        assert_eq!(out["refreshed"], json!(false));
+        assert_eq!(out["subscriptionType"], json!("pro"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auth_missing_file_errors() {
+        let d = Instant::now() + std::time::Duration::from_secs(5);
+        let out = probe_auth("/definitely/missing/tc-claude-auth-test.json", d);
+        assert_eq!(out["provider"], json!("claude-auth"));
+        assert_eq!(out["ready"], json!(false));
+    }
+
+    #[test]
+    fn auth_expired_without_refresh_token_is_logged_out() {
+        let dir = std::env::temp_dir().join(format!("tc-claude-auth-test-nort-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("credentials.json");
+        let past = now_ms() - 60_000;
+        std::fs::write(
+            &path,
+            format!("{{\"claudeAiOauth\":{{\"accessToken\":\"at\",\"expiresAt\":{past}}}}}"),
+        )
+        .unwrap();
+        let d = Instant::now() + std::time::Duration::from_secs(5);
+        let out = probe_auth(path.to_str().unwrap(), d);
+        assert_eq!(out["ready"], json!(false));
+        assert_eq!(out["loggedIn"], json!(false));
+        // No network attempted: file must be untouched.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("\"accessToken\":\"at\""));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auth_expired_refresh_token_is_logged_out() {
+        let dir = std::env::temp_dir().join(format!("tc-claude-auth-test-rtexp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("credentials.json");
+        let past = now_ms() - 60_000;
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"claudeAiOauth\":{{\"accessToken\":\"at\",\"refreshToken\":\"rt\",\"expiresAt\":{past},\"refreshTokenExpiresAt\":{past}}}}}"
+            ),
+        )
+        .unwrap();
+        let d = Instant::now() + std::time::Duration::from_secs(5);
+        let out = probe_auth(path.to_str().unwrap(), d);
+        assert_eq!(out["ready"], json!(false));
+        assert_eq!(out["loggedIn"], json!(false));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scope_string_prefers_stored_scopes() {
+        let oauth = json!({"scopes": ["b", "a"]});
+        assert_eq!(scope_string(&oauth), "b a");
+        assert_eq!(scope_string(&json!({})), DEFAULT_SCOPES.join(" "));
     }
 }

@@ -1,6 +1,9 @@
 --!nonstrict
 -- Claude Code provider: local stats-cache/history files plus the
 -- authoritative OAuth usage endpoint (https://api.anthropic.com/api/oauth/usage).
+-- An expired access token is renewed through the probe helper's OAuth
+-- refresh (same grant the CLI performs on startup) before reporting
+-- "Token expired".
 
 local schema = require("./schema.luau")
 local runner = require("./runner.luau")
@@ -222,29 +225,57 @@ function M.refresh(done)
 	local historyLastUsed = tonumber(p.lastUsedAt) or 0
 
 	local credPath = noctalia.expandPath(trim(cfg("claude_creds_path", "~/.claude/.credentials.json")))
-	local token = ""
-	do
+
+	-- Read the OAuth credentials file. Called again after a CLI refresh
+	-- so a renewed access token is picked up without a restart.
+	local function readCreds()
+		local token = ""
+		local refreshToken = ""
+		local refreshExpired = false
+		local expired = false
+		local oauth = nil
 		local raw = credPath ~= "" and noctalia.readFile(credPath) or nil
 		if raw then
 			local ok, data = pcall(noctalia.json.decode, raw)
 			if ok and type(data) == "table" and type(data.claudeAiOauth) == "table" then
-				local oauth = data.claudeAiOauth
+				oauth = data.claudeAiOauth
 				local t = tostring(oauth.accessToken or "")
 				local expires = tonumber(oauth.expiresAt) or 0
-				if t ~= "" and not (expires > 0 and expires <= os.time() * 1000) then
+				local nowMs = os.time() * 1000
+				if t ~= "" and not (expires > 0 and expires <= nowMs) then
 					token = t
-					local sub = tostring(oauth.subscriptionType or "")
-					if sub ~= "" then
-						p.tier = sub:sub(1, 1):upper() .. sub:sub(2)
-					end
-				elseif expires > 0 and expires <= os.time() * 1000 then
-					p.error = "Token expired"
-				else
-					p.error = "Waiting for auth"
+				elseif expires > 0 and expires <= nowMs then
+					expired = true
 				end
-			else
-				p.error = "Waiting for auth"
+				refreshToken = tostring(oauth.refreshToken or "")
+				local refreshExp = tonumber(oauth.refreshTokenExpiresAt) or 0
+				if refreshExp > 0 and refreshExp <= nowMs then
+					refreshExpired = true
+				end
 			end
+		end
+		return { token = token, refreshToken = refreshToken, refreshExpired = refreshExpired, expired = expired, oauth = oauth }
+	end
+
+	local function applyTier(oauth)
+		if type(oauth) == "table" then
+			local sub = tostring(oauth.subscriptionType or "")
+			if sub ~= "" then
+				p.tier = sub:sub(1, 1):upper() .. sub:sub(2)
+			end
+		end
+	end
+
+	local creds = readCreds()
+	applyTier(creds.oauth)
+	local token = creds.token
+	if token == "" then
+		if creds.oauth == nil then
+			p.error = "Waiting for auth"
+		elseif creds.refreshExpired then
+			p.error = "Re-login required"
+		elseif creds.expired then
+			p.error = "Token expired"
 		else
 			p.error = "Waiting for auth"
 		end
@@ -312,6 +343,7 @@ function M.refresh(done)
 	local historyDone = false
 	local oauthDone = false
 	local finished = false
+	local refreshAttempted = false
 	local function maybeFinish()
 		if historyDone and oauthDone and not finished then
 			finished = true
@@ -326,15 +358,94 @@ function M.refresh(done)
 		historyDone = true
 		maybeFinish()
 	end)
-	if token == "" then
-		-- No OAuth token: still show local history chart.
-		oauthDone = true
-		maybeFinish()
-	else
-		probeOAuth(p, token, function()
+
+	-- Renew the OAuth access token through the probe helper (standard
+	-- refresh-token grant, same as the CLI performs on startup), then
+	-- re-read the credentials file. Calls cb with the fresh access token
+	-- (possibly "").
+	local function attemptRefresh(cb)
+		if refreshAttempted then
+			cb(readCreds().token)
+			return
+		end
+		refreshAttempted = true
+		runner.runClaudeAuthRefresh(function(data)
+			local fresh = readCreds()
+			applyTier(fresh.oauth)
+			local newToken = fresh.token
+			token = newToken
+			if newToken == "" then
+				local loggedIn = nil
+				if type(data) == "table" then
+					loggedIn = data.loggedIn
+				end
+				if loggedIn == false or fresh.refreshExpired then
+					p.error = "Re-login required"
+				elseif p.error == "Waiting for data" then
+					p.error = "Token expired"
+				end
+			end
+			cb(newToken)
+		end)
+	end
+
+	local function canRefresh()
+		if refreshAttempted then
+			return false
+		end
+		local fresh = readCreds()
+		return fresh.refreshToken ~= "" and not fresh.refreshExpired
+	end
+
+	local function probeWith(tok, onDone)
+		probeOAuth(p, tok, onDone)
+	end
+
+	-- Probe usage, retrying once via a token refresh when the endpoint
+	-- rejects the token (stale/revoked access token with a live refresh
+	-- token). finishOAuth runs exactly once per M.refresh call.
+	local function finishOAuth()
+		if not oauthDone then
 			oauthDone = true
 			maybeFinish()
+		end
+	end
+	local function beginUsage(tok)
+		probeWith(tok, function()
+			if p.error == "Token expired" and canRefresh() then
+				attemptRefresh(function(newToken)
+					if newToken ~= "" then
+						probeWith(newToken, function()
+							if p.error == "Token expired" then
+								p.error = "Re-login required"
+							end
+							finishOAuth()
+						end)
+					else
+						finishOAuth()
+					end
+				end)
+				return
+			end
+			finishOAuth()
 		end)
+	end
+
+	if token ~= "" then
+		beginUsage(token)
+	elseif canRefresh() then
+		-- Expired access token but a refresh token exists: renew it first
+		-- instead of showing "Token expired".
+		attemptRefresh(function(newToken)
+			if newToken ~= "" then
+				beginUsage(newToken)
+			else
+				finishOAuth()
+			end
+		end)
+	else
+		-- No OAuth token: still show local history chart.
+		finishOAuth()
 	end
 end
 

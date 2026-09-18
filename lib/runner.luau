@@ -150,4 +150,35 @@ function M.runClaudeHistory(done)
 	end
 end
 
+-- Run `tc-probe claude-auth` so an expired Claude OAuth access token is
+-- renewed via the standard refresh-token grant (the same refresh the
+-- `claude` CLI performs on startup). Returns the raw decoded JSON (or nil
+-- on failure); the Claude Luau module re-reads the credentials file
+-- afterwards.
+function M.runClaudeAuthRefresh(done)
+	local bin = M.probeBin()
+	if not noctalia.fileExists(bin) then
+		done(nil)
+		return
+	end
+	local creds = trim(cfg("claude_creds_path", "~/.claude/.credentials.json"))
+	if creds == "" then
+		creds = "~/.claude/.credentials.json"
+	end
+	local args = { bin, "claude-auth", "--creds-path", creds, "--timeout", tostring(M.probeTimeoutSec()) }
+	local accepted = noctalia.runAsync(args, function(result)
+		local ok, data = pcall(function()
+			return noctalia.json.decode((result and result.stdout) or "")
+		end)
+		if not ok or type(data) ~= "table" then
+			done(nil)
+			return
+		end
+		done(data)
+	end, M.probeTimeoutSec() * 1000 + 5000)
+	if not accepted then
+		done(nil)
+	end
+end
+
 return M

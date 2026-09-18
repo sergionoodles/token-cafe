@@ -4,6 +4,7 @@
 //!   tc-probe <codex|opencode|grok> --cli-bin <bin> [--timeout <secs>]
 //!   tc-probe antigravity --state-db <path> [--project-id <id>] [--timeout <secs>]
 //!   tc-probe claude --projects-dir <path> [--timeout <secs>]
+//!   tc-probe claude-auth --creds-path <path> [--timeout <secs>]
 
 mod antigravity;
 mod claude;
@@ -24,12 +25,13 @@ fn usage_error(provider: &str, msg: &str) -> ! {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let provider = args.first().map(|s| s.as_str()).unwrap_or("");
-    if !["codex", "opencode", "grok", "antigravity", "claude"].contains(&provider) {
-        usage_error("unknown", "Provider must be codex, opencode, grok, antigravity, or claude");
+    if !["codex", "opencode", "grok", "antigravity", "claude", "claude-auth"].contains(&provider) {
+        usage_error("unknown", "Provider must be codex, opencode, grok, antigravity, claude, or claude-auth");
     }
     let mut cli_bin = String::new();
     let mut state_db = String::new();
     let mut projects_dir = String::new();
+    let mut creds_path = String::new();
     let mut project_id = String::new();
     let mut timeout_s = 25.0;
     let mut i = 1;
@@ -46,6 +48,10 @@ fn main() {
             "--projects-dir" => {
                 i += 1;
                 projects_dir = args.get(i).cloned().unwrap_or_default();
+            }
+            "--creds-path" => {
+                i += 1;
+                creds_path = args.get(i).cloned().unwrap_or_default();
             }
             "--project-id" => {
                 i += 1;
@@ -75,6 +81,7 @@ fn main() {
             antigravity::probe(&state_db, &project_id, deadline)
         }
         "claude" => claude::probe(&projects_dir, deadline),
+        "claude-auth" => claude::probe_auth(&creds_path, deadline),
         name => {
             if cli_bin.is_empty() {
                 cli_bin = defaults.iter().find(|(k, _)| *k == name).map(|(_, v)| v.to_string()).unwrap_or_default();
